@@ -1,0 +1,26 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "启动本地后端（含 MySQL）",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"./railway-data-foundation/scripts/start-local.ps1\"",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "停止本地服务",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"./railway-data-foundation/scripts/stop-local.ps1\"",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "启动演示前端",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "$env:Path = 'D:\\Dev\\node.js;' + $env:Path; & 'D:\\Dev\\node.js\\npm.cmd' run dev --prefix ./railway-data-foundation/foundation-web",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

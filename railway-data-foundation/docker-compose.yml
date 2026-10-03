@@ -1,0 +1,53 @@
+name: railway-data-foundation
+services:
+  mysql-foundation:
+    image: ${MYSQL_IMAGE:?Set MYSQL_IMAGE}
+    environment:
+      MYSQL_DATABASE: ${FOUNDATION_DB_NAME:?Set FOUNDATION_DB_NAME}
+      MYSQL_USER: ${FOUNDATION_DB_USER:?Set FOUNDATION_DB_USER}
+      MYSQL_PASSWORD: ${FOUNDATION_DB_PASSWORD:?Set FOUNDATION_DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${FOUNDATION_MYSQL_ROOT_PASSWORD:?Set FOUNDATION_MYSQL_ROOT_PASSWORD}
+    ports:
+      - "${MYSQL_BIND:?Set MYSQL_BIND}:${FOUNDATION_MYSQL_PORT:?Set FOUNDATION_MYSQL_PORT}:3306"
+    volumes:
+      - foundation-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_PASSWORD\" mysql --protocol=TCP -h 127.0.0.1 -u\"$$MYSQL_USER\" -D\"$$MYSQL_DATABASE\" -e 'SELECT 1' >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+  mysql-source:
+    image: ${MYSQL_IMAGE:?Set MYSQL_IMAGE}
+    environment:
+      MYSQL_DATABASE: ${SOURCE_DB_NAME:?Set SOURCE_DB_NAME}
+      MYSQL_USER: ${SOURCE_DB_USER:?Set SOURCE_DB_USER}
+      MYSQL_PASSWORD: ${SOURCE_DB_PASSWORD:?Set SOURCE_DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${SOURCE_MYSQL_ROOT_PASSWORD:?Set SOURCE_MYSQL_ROOT_PASSWORD}
+    ports:
+      - "${MYSQL_BIND:?Set MYSQL_BIND}:${SOURCE_MYSQL_PORT:?Set SOURCE_MYSQL_PORT}:3306"
+    volumes:
+      - source-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_PASSWORD\" mysql --protocol=TCP -h 127.0.0.1 -u\"$$MYSQL_USER\" -D\"$$MYSQL_DATABASE\" -e 'SELECT 1' >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+  source-migrate:
+    image: ${FLYWAY_IMAGE:?Set FLYWAY_IMAGE}
+    depends_on:
+      mysql-source:
+        condition: service_healthy
+    environment:
+      FLYWAY_URL: ${SOURCE_MIGRATION_URL:?Set SOURCE_MIGRATION_URL}
+      FLYWAY_USER: ${SOURCE_DB_USER:?Set SOURCE_DB_USER}
+      FLYWAY_PASSWORD: ${SOURCE_DB_PASSWORD:?Set SOURCE_DB_PASSWORD}
+      FLYWAY_CONNECT_RETRIES: "30"
+      FLYWAY_CLEAN_DISABLED: "true"
+    volumes:
+      - ./sql/source:/flyway/sql:ro
+    command: migrate
+volumes:
+  foundation-mysql:
+  source-mysql:

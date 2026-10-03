@@ -1,0 +1,30 @@
+{
+  "name": "railway-foundation-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "test": "node --test scripts/*.test.mjs",
+    "test:resource-live": "node scripts/resource-live.mjs",
+    "test:smoke": "node scripts/smoke.mjs",
+    "test:source-live": "node scripts/source-live.mjs",
+    "test:capability-live": "node scripts/capability-live.mjs",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "axios": "^1.12.2",
+    "element-plus": "^2.11.5",
+    "vue": "^3.5.22",
+    "vue-router": "^4.5.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.1",
+    "playwright-core": "^1.55.1",
+    "vite": "^7.1.7"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  }
+}

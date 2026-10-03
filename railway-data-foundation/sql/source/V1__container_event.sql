@@ -1,0 +1,20 @@
+CREATE TABLE container_event (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '事件主键',
+    container_no VARCHAR(20) NOT NULL COMMENT '集装箱号',
+    event_type VARCHAR(20) NOT NULL COMMENT '作业类型：GATE_IN/GATE_OUT/LOAD/UNLOAD',
+    event_time DATETIME(3) NOT NULL COMMENT '作业发生时间',
+    port_code VARCHAR(20) NOT NULL COMMENT '港口代码',
+    yard_code VARCHAR(30) NOT NULL COMMENT '堆场代码',
+    train_no VARCHAR(30) COMMENT '海铁联运班列号',
+    operation_status VARCHAR(20) NOT NULL COMMENT '作业状态',
+    equipment_no VARCHAR(30) COMMENT '作业设备编号',
+    source_system VARCHAR(50) NOT NULL COMMENT '源业务系统标识',
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
+    PRIMARY KEY (id),
+    KEY idx_container_time (container_no, event_time),
+    KEY idx_train_time (train_no, event_time),
+    KEY idx_type_time (event_type, event_time),
+    KEY idx_event_time (event_time),
+    CONSTRAINT chk_event_type CHECK (event_type IN ('GATE_IN','GATE_OUT','LOAD','UNLOAD'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='广州港模拟集装箱作业事件（仅Source保存明细）';

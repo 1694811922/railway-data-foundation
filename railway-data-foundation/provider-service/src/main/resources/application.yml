@@ -1,0 +1,22 @@
+server:
+  address: ${PROVIDER_BIND:127.0.0.1}
+  port: ${PROVIDER_PORT:18081}
+  error:
+    include-message: never
+    include-stacktrace: never
+spring:
+  application:
+    name: provider-service
+  datasource:
+    url: ${PROVIDER_SOURCE_DB_URL}
+    username: ${PROVIDER_SOURCE_DB_USER}
+    password: ${PROVIDER_SOURCE_DB_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      connection-timeout: 3000
+      maximum-pool-size: 3
+  flyway:
+    enabled: false
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true

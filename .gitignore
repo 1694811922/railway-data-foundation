@@ -1,0 +1,25 @@
+.legacy-backup/
+.runtime/
+*.log
+.idea/
+
+# Local credentials and environment files. Only checked examples are committed.
+.env*
+!.env.example
+!railway-data-foundation/foundation-web/.env.development
+*.pem
+*.key
+client.cnf
+
+# Dependencies, build output, and local tooling for report preparation.
+node_modules/
+.pnpm-store/
+target/
+dist/
+.ppt-foundation/
+.requirements-work/
+__pycache__/
+*.pyc
+~$*
+Thumbs.db
+.DS_Store
