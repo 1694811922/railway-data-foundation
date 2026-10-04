@@ -6,7 +6,12 @@ import { hub } from '../../utils/dataHub'
 import { resourceError, validateResource } from '../../utils/resourceForm'
 import DemoNotice from '../../components/DemoNotice.vue'
 import StatusTag from '../../components/StatusTag.vue'
+import { catalogQuery, catalogRouteQuery } from '../../utils/resourceCatalog'
 const route = useRoute(), router = useRouter()
+function returnToCatalog() {
+  const state=catalogQuery(route.query)
+  router.push({path:'/resources',query:catalogRouteQuery(state.filters,state.page,state.pageSize)})
+}
 const item = ref(null), fields = ref([]), capabilities = ref([]), demo = ref(false), tab = ref('base')
 const dialog = ref(false), loading = ref(false), publishing = ref(false), savingField = ref(false)
 const loadError = ref(''), fieldError = ref(''), capabilityError = ref('')
@@ -65,7 +70,7 @@ watch(() => route.params.id, () => { dialog.value=false; tab.value='base'; load(
 
 <template>
   <div v-if="item" class="stack">
-    <div class="detail-actions"><el-button link @click="router.push('/resources')">← 返回资源目录</el-button><div>
+    <div class="detail-actions"><el-button link @click="returnToCatalog">← 返回资源目录</el-button><div>
       <el-button :loading="loading" :disabled="publishing || savingField" @click="load">刷新详情</el-button>
       <el-button v-if="item.status==='DRAFT'" type="primary" :loading="publishing" :disabled="loading || savingField" @click="publish">发布资源</el-button>
     </div></div>
@@ -129,7 +134,7 @@ watch(() => route.params.id, () => { dialog.value=false; tab.value='base'; load(
     </el-dialog>
   </div>
   <div v-else class="panel empty-hint" v-loading="loading">
-    <p>{{ loadError || '正在加载资源详情…' }}</p><el-button v-if="loadError" @click="load">重新加载</el-button><el-button link type="primary" @click="router.push('/resources')">返回资源目录</el-button>
+    <p>{{ loadError || '正在加载资源详情…' }}</p><el-button v-if="loadError" @click="load">重新加载</el-button><el-button link type="primary" @click="returnToCatalog">返回资源目录</el-button>
   </div>
 </template>
 <style scoped>

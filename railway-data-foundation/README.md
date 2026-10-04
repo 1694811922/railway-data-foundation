@@ -80,6 +80,10 @@ npm run dev
 
 资源登记和字段维护也已使用真实操作结果：来源表只读，详情可发布草稿，发布后才能登记能力；真实保存、发布与字段编辑失败保留输入并提示刷新，不模拟成功。指定资源字段和扫描结果读取失败显示错误，演示字段按资源隔离。详见[资源流程修复记录](docs/RESOURCE_FLOW_CHANGELOG.md)。
 
+首页已分页统计现有元数据接口，修复首批记录被误当作总数和UTC跨日问题。读取失败显示“—”，超出5,000条上限显示“≥”及范围；可用能力同时检查来源启用与资源发布状态，不代表实时探测。首页仅在显式`VITE_USE_MOCK=true`时使用演示统计。见[首页交付记录](docs/DASHBOARD_CHANGELOG.md)。
+
+资源目录已支持关键词/来源/状态/安全等级组合筛选、10/20/50条分页及刷新/详情返回条件保留。使用已有资源分页接口，每次最多读取5,000项并标记范围；中途读取失败或真实目录刷新失败不切为演示。见[目录交付记录](docs/RESOURCE_CATALOG_CHANGELOG.md)。
+
 本地配置在 `.env.local`（自动生成随机密码，已被 Git 忽略），日志及持久化 MySQL 数据位于 `.runtime/local/`。本地使用一个 MySQL 实例、两个独立数据库，默认端口 13306；Foundation 使用仅限 `foundation_db` 的账号，Source 迁移使用 `source_app`，Provider 使用新建的 `provider_reader` 只读账号。Source 由独立 Flyway 命令迁移。不要删除 `.env.local` 或 `.runtime/local/data/`，它们需要配套保留。
 
 首次在其他机器使用时，先设置 `$env:LOCAL_JAVA_HOME`（JDK 17 安装目录）及 `$env:LOCAL_MYSQL_HOME`（MySQL 8 安装目录），再运行启动脚本。`-Offline` 使用已有 Maven 缓存；缺少依赖时省略此选项。已有 JAR 时默认不重新编译，代码修改后需使用 `-Build`。脚本仅对本次 PowerShell 进程绕过脚本执行策略，不修改系统策略。
@@ -131,3 +135,9 @@ mvn test
 默认执行不依赖数据库的测试，真实 MySQL 集成测试明确跳过。本地完整测试可以运行 `powershell -ExecutionPolicy Bypass -File ./scripts/test-local.ps1 -Offline`，脚本使用独立测试库；不能把默认跳过解释为 MySQL 测试通过。详细覆盖范围见 [SOURCE_API.md](docs/SOURCE_API.md) 和 [测试说明](docs/TESTING.md)。
 
 详细进度见 [IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)，阶段顺序见 [ROADMAP.md](docs/ROADMAP.md)。V0.1 已完成；V0.2 已实现 Capability 登记、Provider REST 与指定 REST 探测、Provider Kafka 生产及 Topic 元数据验证。Kafka 集成测试使用嵌入式 Broker；本机常驻服务需另行启动 Broker。V0.3 按用户要求暂停。
+
+接口能力前端已增加中文组合检索、分页和已发布资源选择，默认真实模式的读取失败不自动混入演示；提交与调用说明增加重复操作和旧请求保护。20项前端测试、构建、浏览器专项及真实REST启停回归通过。详见[能力管理交付记录](docs/CAPABILITY_CATALOG_CHANGELOG.md)。
+
+元数据扫描工作台已增加任务分页/筛选、表和字段检索、所选任务刷新、故障重试和旧请求隔离。24项前端测试、构建、扫描浏览器专项及真实资源/两库扫描回归通过。后端仍采用原有同步扫描接口，V0.3保持暂停。详见[扫描工作台交付记录](docs/SCAN_WORKBENCH_CHANGELOG.md)。
+
+数据源管理已增加中文检索、分页、读取错误及保存/连接测试保护；默认真实读取失败不切演示，失败保留表单且密码不持久化。28项前端测试、构建、浏览器专项及真实两库接入回归通过，数据库仍为V6。详见[数据源管理交付记录](docs/SOURCE_CATALOG_CHANGELOG.md)。

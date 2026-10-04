@@ -1,72 +1,152 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { hub } from '../../utils/dataHub'
 import DemoNotice from '../../components/DemoNotice.vue'
 import StatusTag from '../../components/StatusTag.vue'
 import { displayTime } from '../../utils/time'
-import { canUseDemo } from '../../utils/request'
+import { filterSources, validateSource, sourceSaveScope } from '../../utils/sourceCatalog'
+import { catalogPage, resourcePageSizes } from '../../utils/resourceCatalog'
+import { isDemoSource } from '../../mock/demoData'
 const router=useRouter()
 const rows=ref([]), demo=ref(false), loading=ref(false), dialog=ref(false), saving=ref(false), editingId=ref('')
 const checked=reactive({}), busy=reactive({})
+const listError=ref(''), notice=ref(''), formDemo=ref(false), keyword=ref(''), typeFilter=ref(''), statusFilter=ref(''), page=ref(1), pageSize=ref(10)
+let readVersion=0,active=true
 const blank=()=>({source_name:'',source_type:'MYSQL',description:'',host:'',port:3306,database_name:'',username:'',password:'',ssl_mode:'PREFERRED',status:'ENABLED',connection_mode:'DYNAMIC'})
 const form=reactive(blank())
 const types={MYSQL:'MySQL数据库',ORACLE:'Oracle数据库',POSTGRESQL:'PostgreSQL数据库'}
-async function load(){loading.value=true;try{const result=await hub.sources();rows.value=result.rows||[];demo.value=result.demo}catch{ElMessage.error('数据源列表加载失败')}finally{loading.value=false}}
-function open(row){Object.keys(form).forEach(k=>delete form[k]);Object.assign(form,blank(),row||{},{password:''});editingId.value=row?.source_id||'';dialog.value=true}
-function validate(){
-  if(!form.source_name.trim() || !form.host.trim() || !form.database_name.trim() || !form.username.trim()){ElMessage.warning('请填写数据源名称、数据库地址、数据库名称和用户名');return false}
-  if(!/^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/.test(form.host.trim())){ElMessage.warning('请输入合法的 IPv4 地址或域名，不要填写完整连接地址');return false}
-  if(!/^[A-Za-z0-9_]{1,64}$/.test(form.database_name.trim())){ElMessage.warning('数据库名称仅支持字母、数字和下划线');return false}
-  if(!Number.isInteger(Number(form.port)) || Number(form.port)<1 || Number(form.port)>65535){ElMessage.warning('端口必须为 1–65535 范围内的整数');return false}
-  if(!form.password && (!editingId.value || form.connection_mode==='ENV_REFERENCE')){ElMessage.warning('新增或转换数据源时请输入数据库密码');return false}
-  return true
+const visible=computed(()=>filterSources(rows.value,{keyword:keyword.value,source_type:typeFilter.value,status:statusFilter.value}))
+const paged=computed(()=>catalogPage(visible.value,page.value,pageSize.value))
+const hasBusy=computed(()=>Object.values(busy).some(Boolean))
+const canManage=computed(()=>!loading.value&&!saving.value&&!hasBusy.value&&!listError.value)
+const formScopeError=computed(()=>sourceSaveScope(editingId.value,rows.value,formDemo.value))
+watch([keyword,typeFilter,statusFilter,pageSize],()=>{page.value=1})
+function resetFilters(){keyword.value='';typeFilter.value='';statusFilter.value='';page.value=1}
+function clearChecks(){Object.keys(checked).forEach(key=>delete checked[key])}
+function operationError(error,fallback,uncertain=false){
+  if(uncertain&&(error.code==='ECONNABORTED'||error.code==='ERR_NETWORK'))return '操作结果尚未确认，请刷新列表或任务检查实际状态，不要重复提交'
+  return error.response?.data?.message||fallback
 }
-async function save(andTest=false){if(!validate())return;saving.value=true;try{
+async function load(){
+  const version=++readVersion
+  loading.value=true;clearChecks()
+  try{
+    const result=await hub.sourceCatalog()
+    if(version!==readVersion)return
+    rows.value=result.rows;demo.value=result.demo;listError.value=result.error?result.notice:'';notice.value=!result.error&&!result.complete?result.notice:''
+    page.value=paged.value.page
+  }catch{
+    if(version!==readVersion)return
+    rows.value=[];demo.value=false;notice.value='';listError.value='数据源列表读取失败，请刷新重试'
+  }finally{if(version===readVersion)loading.value=false}
+}
+function open(row){
+  if(!canManage.value)return
+  Object.keys(form).forEach(k=>delete form[k]);Object.assign(form,blank(),row||{},{password:''})
+  editingId.value=row?.source_id||'';formDemo.value=row?isDemoSource(row.source_id):demo.value;dialog.value=true
+}
+function closeForm(){if(!saving.value)form.password=''}
+async function save(andTest=false){
+  if(saving.value||loading.value||hasBusy.value||listError.value)return
+  const invalid=formScopeError.value||validateSource(form,editingId.value)
+  if(invalid)return ElMessage.warning(invalid)
+  saving.value=true
+  try{
   const payload={source_name:form.source_name.trim(),source_type:form.source_type,description:form.description,
     host:form.host.trim(),port:Number(form.port),database_name:form.database_name.trim(),username:form.username.trim(),ssl_mode:form.ssl_mode,status:form.status}
   if(form.password)payload.password=form.password
-  const result=await hub.saveSource(payload,editingId.value||undefined,demo.value)
+  const result=await hub.saveSource(payload,editingId.value||undefined,formDemo.value)
+  if(!active)return
   form.password='';dialog.value=false;await load();if(editingId.value)delete checked[editingId.value]
   ElMessage.success(result.demo?'演示配置已保存到当前浏览器，密码未保存':'数据源配置已保存')
-  if(andTest)await test(result.value)
-}catch(e){if(canUseDemo(e))ElMessage.error('数据源保存请求失败，请检查后端服务后重试')}finally{saving.value=false}}
-async function test(row){busy[row.source_id]=true;delete checked[row.source_id];try{const result=await hub.testSource(row);checked[row.source_id]=result.value;if(result.value.connected)ElMessage.success(result.demo?'演示连接成功':'连接成功');else ElMessage.error(result.value.reason||'连接失败')}catch(e){if(canUseDemo(e))ElMessage.error('连接测试请求失败，请检查后端服务')}finally{busy[row.source_id]=false}}
-async function scan(row){busy[row.source_id]=true;try{const result=await hub.startScan(row);if(result.value.status==='FAILED')ElMessage.error(result.value.failure_reason||'扫描失败');else ElMessage.success(result.demo?'演示扫描完成':'扫描完成');router.push({path:'/scans',query:{task:result.value.task_id}})}catch(e){if(canUseDemo(e))ElMessage.error('扫描请求失败，请检查后端服务后重试')}finally{busy[row.source_id]=false}}
-async function changeStatus(row){busy[row.source_id]=true;try{const status=row.status==='DISABLED'?'ENABLED':'DISABLED';await hub.sourceStatus(row.source_id,status,row._demo===true);delete checked[row.source_id];await load();ElMessage.success(status==='ENABLED'?'数据源已启用':'数据源已停用')}catch(e){if(canUseDemo(e))ElMessage.error('启停请求失败，请检查后端服务')}finally{busy[row.source_id]=false}}
+  // Saved successfully; a later connection error must not imply the save failed.
+  if(andTest)await test(rowForTest(result),true)
+  }catch(e){if(active)ElMessage.error(operationError(e,'数据源保存请求失败，请检查后端服务后重试',true))}
+  finally{saving.value=false}
+}
+function rowForTest(result){return {...result.value,_demo:result.demo}}
+async function test(row,afterSave=false){
+  if(busy[row.source_id]||loading.value||(!afterSave&&!canManage.value)||row.status!=='ENABLED')return
+  busy[row.source_id]='test';delete checked[row.source_id]
+  const version=readVersion
+  try{
+    const result=await hub.testSource(row)
+    if(version!==readVersion)return
+    checked[row.source_id]={...result.value,tested_at:new Date().toISOString()}
+    if(result.value.connected)ElMessage.success(result.demo?'演示连接成功':'连接成功')
+    else ElMessage.error(result.value.reason||'连接失败')
+  }catch(e){
+    if(version!==readVersion)return
+    const reason=operationError(e,'连接测试请求失败，请检查后端服务')
+    checked[row.source_id]={error:true,reason,tested_at:new Date().toISOString()};ElMessage.error(reason)
+  }finally{delete busy[row.source_id]}
+}
+async function scan(row){
+  if(!canManage.value||row.status!=='ENABLED')return
+  busy[row.source_id]='scan'
+  try{
+    const result=await hub.startScan(row)
+    if(!active)return
+    if(result.value.status==='FAILED')ElMessage.error(result.value.failure_reason||'扫描失败')
+    else ElMessage.success(result.demo?'演示扫描完成':'扫描完成')
+    router.push({path:'/scans',query:{task:result.value.task_id}})
+  }catch(e){if(active)ElMessage.error(operationError(e,'扫描请求失败，请检查后端服务后重试',true))}
+  finally{delete busy[row.source_id]}
+}
+async function changeStatus(row){
+  if(!canManage.value)return
+  busy[row.source_id]='status'
+  try{
+    const status=row.status==='DISABLED'?'ENABLED':'DISABLED'
+    await hub.sourceStatus(row.source_id,status,isDemoSource(row.source_id))
+    if(!active)return
+    await load()
+    ElMessage.success(status==='ENABLED'?'数据源已启用':'数据源已停用')
+  }catch(e){if(active)ElMessage.error(operationError(e,'启停请求失败，请检查后端服务',true))}
+  finally{delete busy[row.source_id]}
+}
 onMounted(load)
+onBeforeUnmount(()=>{active=false;++readVersion;form.password=''})
 </script>
 <template>
   <div class="stack">
-    <div class="page-heading"><div><div class="eyebrow">接入管理</div><h1>数据源管理</h1><p>登记连接配置，测试外部数据库，发现表与字段结构</p></div><el-button type="primary" @click="open()">＋ 新增数据源</el-button></div>
+    <div class="page-heading"><div><div class="eyebrow">接入管理</div><h1>数据源管理</h1><p>登记连接配置，测试外部数据库，发现表与字段结构</p></div><div class="source-actions"><el-button :loading="loading" :disabled="saving||hasBusy" @click="load">刷新列表</el-button><el-button type="primary" :disabled="!canManage" @click="open()">＋ 新增数据源</el-button></div></div>
     <DemoNotice :show="demo" text="当前为演示数据，配置仅保存于当前浏览器；密码不会保存，连接与扫描结果仅用于展示。" />
-    <div class="panel"><div class="panel-title">接入数据源 <span class="panel-sub">共 {{ rows.length }} 个</span></div>
-      <el-table :data="rows" v-loading="loading" empty-text="暂无数据源，请先新增" style="width:100%">
+    <el-alert v-if="listError" :title="listError" description="已清空旧列表，暂时不能新增或编辑；不会切换为演示数据，请检查服务后刷新。" type="error" :closable="false" show-icon data-testid="source-list-error" />
+    <el-alert v-if="notice" :title="notice" description="筛选与分页仅涵盖已读取元数据，最多读取5,000项。" type="warning" :closable="false" show-icon />
+    <div class="panel"><div class="panel-title">接入数据源 <span class="panel-sub" data-testid="source-count">{{ listError?'读取失败':'已读取 '+rows.length+' 项 · 匹配 '+visible.length+' 项' }}</span></div>
+      <el-form label-position="top" class="source-filters"><el-form-item label="数据源关键词"><el-input v-model="keyword" clearable maxlength="200" placeholder="名称、编号、地址、数据库或备注" /></el-form-item><el-form-item label="类型筛选"><el-select v-model="typeFilter" clearable placeholder="全部类型"><el-option v-for="(label,value) in types" :key="value" :label="label" :value="value" /></el-select></el-form-item><el-form-item label="状态筛选"><el-select v-model="statusFilter" clearable placeholder="全部状态"><el-option label="已启用" value="ENABLED" /><el-option label="已停用" value="DISABLED" /></el-select></el-form-item><el-button @click="resetFilters">重置筛选</el-button></el-form>
+      <p class="scope-note">空格分隔的关键词需同时匹配。启用状态不代表连接成功，连接结果以最近一次手动测试为准。</p>
+      <el-table v-if="!listError" :data="paged.rows" v-loading="loading" empty-text="暂无符合条件的数据源" style="width:100%" data-testid="source-table">
         <el-table-column prop="source_name" label="数据源名称" min-width="170" fixed="left" />
-        <el-table-column label="数据源ID" min-width="175"><template #default="{row}"><span class="id-text">{{ row.source_id }}</span></template></el-table-column>
+        <el-table-column label="数据源编号" min-width="175" show-overflow-tooltip><template #default="{row}"><span class="id-text">{{ row.source_id }}</span></template></el-table-column>
         <el-table-column label="数据源类型" width="130"><template #default="{row}">{{ types[row.source_type] || row.source_type }}</template></el-table-column>
         <el-table-column prop="host" label="数据库地址" min-width="135" />
         <el-table-column prop="port" label="端口" width="80" />
         <el-table-column prop="database_name" label="数据库名称" min-width="145" />
-        <el-table-column label="状态" width="95"><template #default="{row}"><StatusTag :value="row.status || 'ENABLED'" /></template></el-table-column>
+        <el-table-column label="状态" width="95"><template #default="{row}"><StatusTag :value="row.status" /></template></el-table-column>
         <el-table-column label="最近更新时间" min-width="165"><template #default="{row}">{{ displayTime(row.updated_at) }}</template></el-table-column>
         <el-table-column label="操作" min-width="265" fixed="right"><template #default="{row}"><div class="table-actions">
-          <el-button link type="primary" :disabled="busy[row.source_id] || row.status==='DISABLED'" @click="test(row)">测试连接</el-button>
-          <el-button link type="primary" :disabled="busy[row.source_id] || row.status==='DISABLED'" @click="scan(row)">开始扫描</el-button>
-          <el-button link type="primary" :disabled="busy[row.source_id]" @click="open(row)">编辑</el-button>
-          <el-button link :type="row.status==='DISABLED'?'primary':'warning'" :disabled="busy[row.source_id]" @click="changeStatus(row)">{{ row.status==='DISABLED'?'启用':'停用' }}</el-button>
+          <el-button link type="primary" :loading="busy[row.source_id]==='test'" :disabled="!canManage || row.status!=='ENABLED'" @click="test(row)">测试连接</el-button>
+          <el-button link type="primary" :loading="busy[row.source_id]==='scan'" :disabled="!canManage || row.status!=='ENABLED'" @click="scan(row)">开始扫描</el-button>
+          <el-button link type="primary" :disabled="!canManage" @click="open(row)">编辑</el-button>
+          <el-button link :type="row.status==='DISABLED'?'primary':'warning'" :loading="busy[row.source_id]==='status'" :disabled="!canManage" @click="changeStatus(row)">{{ row.status==='DISABLED'?'启用':'停用' }}</el-button>
         </div></template></el-table-column>
       </el-table>
+      <div v-if="!listError" class="source-pagination"><span>已读取结果分页</span><el-pagination :current-page="paged.page" v-model:page-size="pageSize" :page-sizes="resourcePageSizes" :total="visible.length" layout="sizes,prev,pager,next,jumper" :disabled="loading||saving||hasBusy" @current-change="page=$event" /></div>
     </div>
     <div v-for="row in rows.filter(r=>checked[r.source_id])" :key="row.source_id" class="panel" style="padding:18px 20px">
-      <div class="panel-title">{{ row.source_name }} · 连接测试</div>
-      <el-descriptions :column="4" border><el-descriptions-item label="连接状态"><el-tag :type="checked[row.source_id].connected?'success':'danger'">{{ checked[row.source_id].connected?'连接成功':'连接失败' }}</el-tag></el-descriptions-item><el-descriptions-item label="数据库类型">{{ checked[row.source_id].database_product || '—' }}</el-descriptions-item><el-descriptions-item label="数据库版本">{{ checked[row.source_id].database_version || '—' }}</el-descriptions-item><el-descriptions-item label="响应时间">{{ checked[row.source_id].response_time_ms }} ms</el-descriptions-item></el-descriptions>
+      <div class="panel-title">{{ row.source_name }} · 连接测试 <span class="panel-sub">{{ displayTime(checked[row.source_id].tested_at) }}</span></div>
+      <el-descriptions :column="4" border><el-descriptions-item label="连接状态"><el-tag :type="checked[row.source_id].connected?'success':'danger'">{{ checked[row.source_id].error?'请求失败':checked[row.source_id].connected?'连接成功':'连接失败' }}</el-tag></el-descriptions-item><el-descriptions-item label="数据库类型">{{ checked[row.source_id].database_product || '—' }}</el-descriptions-item><el-descriptions-item label="数据库版本">{{ checked[row.source_id].database_version || '—' }}</el-descriptions-item><el-descriptions-item label="响应时间">{{ checked[row.source_id].response_time_ms == null?'—':checked[row.source_id].response_time_ms+' ms' }}</el-descriptions-item></el-descriptions>
       <p v-if="!checked[row.source_id].connected" style="color:#c45656;margin-bottom:0">失败原因：{{ checked[row.source_id].reason }}</p>
     </div>
-    <el-dialog v-model="dialog" :title="editingId?'编辑数据源':'新增数据源'" width="720px" @closed="form.password=''">
+    <el-dialog v-model="dialog" :title="editingId?'编辑数据源':'新增数据源'" width="720px" :show-close="!saving" :close-on-press-escape="!saving" :close-on-click-modal="false" @close="closeForm">
+      <el-alert :title="formDemo?'本次保存演示配置，密码不会保存到浏览器。':'本次保存真实配置，失败不会模拟成功；编辑密码留空保留原凭据。'" :type="formDemo?'warning':'info'" :closable="false" show-icon class="form-notice" />
+      <el-alert v-if="formScopeError||listError" :title="formScopeError||listError" type="warning" :closable="false" show-icon class="form-notice" />
       <el-alert v-if="form.connection_mode==='ENV_REFERENCE'" type="info" :closable="false" title="此数据源使用旧配置方式。保存后将转为动态配置，请重新输入密码；现有数据源无需转换也可继续使用。" style="margin-bottom:16px" />
-      <el-form label-position="top" :model="form">
+      <el-form label-position="top" :model="form" :disabled="saving">
         <h3>基本信息</h3><div class="grid-2">
           <el-form-item label="数据源名称" required><el-input v-model="form.source_name" maxlength="120" placeholder="例如：广州港业务数据库" /></el-form-item>
           <el-form-item label="数据源类型"><el-select v-model="form.source_type" style="width:100%"><el-option label="MySQL数据库" value="MYSQL" /></el-select></el-form-item>
@@ -82,7 +162,17 @@ onMounted(load)
         <p class="dim">数据库密码仅用于后端建立连接，查询不会回显，浏览器不会持久保存明文密码。</p>
         <el-alert type="info" :closable="false" title="建议使用只读数据库账号，仅授予元数据读取和必要查询权限。扫描只读取数据库结构。" />
       </el-form>
-      <template #footer><el-button :disabled="saving" @click="dialog=false">取消</el-button><el-button :loading="saving" @click="save(true)" :disabled="form.status==='DISABLED'">保存并测试连接</el-button><el-button type="primary" :loading="saving" @click="save(false)">保存</el-button></template>
+      <template #footer><el-button :disabled="saving" @click="dialog=false">取消</el-button><el-button :loading="saving" @click="save(true)" :disabled="!!formScopeError||!!listError||form.status==='DISABLED'">保存并测试连接</el-button><el-button type="primary" :loading="saving" :disabled="!!formScopeError||!!listError" @click="save(false)">保存</el-button></template>
     </el-dialog>
   </div>
 </template>
+<style scoped>
+.source-actions { display:flex;gap:8px; }
+.source-filters { display:grid;grid-template-columns:minmax(240px,2fr) repeat(2,minmax(150px,1fr)) auto;gap:12px;align-items:end; }
+.source-filters .el-form-item { margin-bottom:0; }
+.scope-note { font-size:12px;color:#718497;line-height:1.7;margin:14px 0; }
+.source-pagination { display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-top:20px;font-size:12px;color:#718497; }
+.form-notice { margin-bottom:12px; }
+@media(max-width:900px) { .source-filters { grid-template-columns:1fr 1fr; } }
+@media(max-width:760px) { .source-filters { grid-template-columns:1fr; } }
+</style>

@@ -1,6 +1,6 @@
 import { request } from '../utils/request'
 export const capabilityApi = {
-  list: () => request.get('/capabilities'),
+  list: (params = {}) => request.get('/capabilities', { params }),
   byResource: (id) => request.get(`/resources/${encodeURIComponent(id)}/capabilities`),
   get: (id) => request.get(`/capabilities/${encodeURIComponent(id)}`),
   runtime: (id) => request.get(`/capabilities/${encodeURIComponent(id)}/runtime`),

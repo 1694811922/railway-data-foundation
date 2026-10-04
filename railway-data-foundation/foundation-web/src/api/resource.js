@@ -1,6 +1,6 @@
 import { request } from '../utils/request'
 export const resourceApi = {
-  list: () => request.get('/resources'),
+  list: (params = {}) => request.get('/resources', { params }),
   get: (id) => request.get(`/resources/${encodeURIComponent(id)}`),
   create: (body) => request.post('/resources', body),
   update: (id, body) => request.put(`/resources/${encodeURIComponent(id)}`, body),

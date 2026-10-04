@@ -32,6 +32,9 @@ try {
     host:uri.hostname,port:Number(uri.port),database_name:uri.pathname.slice(1),username:process.env.PROVIDER_SOURCE_DB_USER,
     password:process.env.PROVIDER_SOURCE_DB_PASSWORD,ssl_mode:'DISABLED'}}))
   fixtures.push({source_id:source.source_id,source_name:source.source_name,credential_ref:source.credential_ref})
+  // Persist cleanup identity before any UI wait, including failures that terminate Node early.
+  await mkdir('.runtime',{recursive:true})
+  await writeFile('.runtime/resource-live-fixtures.json',JSON.stringify(fixtures,null,2))
   const scan = await data(await page.request.post(api+'/sources/'+source.source_id+'/scan'))
   assert(scan.status==='SUCCESS' && scan.field_count===12,'Real scan failed')
   const secondScan = await data(await page.request.post(api+'/sources/'+source.source_id+'/scan'))
@@ -49,6 +52,9 @@ try {
   await page.route(fieldsUrl,async route=>{started();await gate;await route.continue()})
   await page.getByRole('button',{name:'查看字段',exact:true}).first().click()
   await intercepted
+  // The drawer now shows loading immediately; close it before switching tasks.
+  await page.getByRole('dialog').locator('.el-drawer__close-btn').click()
+  await page.getByRole('dialog').waitFor({state:'hidden'})
   const selectedResponse = page.waitForResponse(r=>r.url().endsWith('/scan-tasks/'+secondScan.task_id+'/tables'))
   await page.locator('[data-task-id="'+secondScan.task_id+'"]').getByRole('button',{name:'查看扫描结果'}).click()
   await selectedResponse

@@ -1,6 +1,6 @@
 import { request } from '../utils/request'
 export const sourceApi = {
-  list: () => request.get('/sources', { params: { limit: 200 } }),
+  list: (params = {}) => request.get('/sources', { params: { limit: 200, ...params } }),
   get: (id) => request.get(`/sources/${encodeURIComponent(id)}`),
   create: (body) => request.post('/sources', body),
   update: (id, body) => request.put(`/sources/${encodeURIComponent(id)}`, body),

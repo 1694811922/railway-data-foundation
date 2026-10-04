@@ -53,6 +53,8 @@ runtime响应仅有`capability_id/status/enabled/reason/source_host/source_port/
 
 ## 调用说明与登记帮助
 
+能力管理通过已有能力和资源分页接口读取，每类最多5,000项；前端提供组合检索、10/20/50项显示分页和范围提示，未增加搜索接口。注册只选择已发布资源。默认模式下读取失败清空对应区域，不自动切成演示；演示配置或已存在的演示资源入口统一使用演示数据。真实保存失败保留输入、不自动重发，网络中断或超时提示刷新确认；提交期间防止重复保存，同编号旧调用说明不能覆盖新请求。实现与验证见[能力管理交付记录](CAPABILITY_CATALOG_CHANGELOG.md)。
+
 接口能力详情通过`invocation`读取提供服务地址；与REST验证复用服务端`PROVIDER_REST_BASE_URL`配置和地址校验，不从前端指定目标主机。读取说明不发送HEAD、不读取业务行、不改变能力状态。草稿和停用能力也可查看说明，但`enabled=false`，不代表可以调用。仅支持现有无认证`GET /containers/events`；其他能力类型返回明确错误，未知编号返回404。
 
 响应字段为`capability_id/http_method/provider_base_url/endpoint/request_url/header_name/header_value/enabled/reason`。例如`provider_base_url=http://127.0.0.1:18081/`，`request_url=http://127.0.0.1:18081/containers/events`，请求头名为`X-Capability-Id`，值为实际能力编号。无数据库密码、用户名、凭据或业务明细。地址只接受HTTP/HTTPS根地址，不接受用户信息、子路径、查询参数或片段；协议须与能力一致。

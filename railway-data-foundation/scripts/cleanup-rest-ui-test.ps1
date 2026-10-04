@@ -4,13 +4,15 @@ param([ValidateSet('rest-live-fixtures.json','resource-live-fixtures.json')][str
 if ($env:FOUNDATION_DB_URL -notmatch '^jdbc:mysql://127\.0\.0\.1:[0-9]+/foundation_db\?') { throw 'Cleanup is restricted to the local Foundation development schema.' }
 $manifest=Join-Path $LocalProject "foundation-web/.runtime/$ManifestName"
 if (-not (Test-Path -LiteralPath $manifest)) { throw 'REST UI fixture manifest not found.' }
-$fixtures=@(Get-Content -LiteralPath $manifest -Raw -Encoding UTF8 | ConvertFrom-Json)
+# Windows PowerShell 5.1 emits a JSON array as one pipeline object. Wrapping that
+# pipeline in @() creates a nested array and silently skips multi-fixture cleanup.
+$fixtures=Get-Content -LiteralPath $manifest -Raw -Encoding UTF8 | ConvertFrom-Json
 Push-Location $LocalRuntime
 try {
     foreach ($fixture in $fixtures) {
         $sourceId=$fixture.source_id
         $ref=$fixture.credential_ref
-        if ($sourceId -notmatch '^SRC_[a-f0-9]{32}$' -or $ref -notmatch '^CRED_[a-f0-9]{32}$') { throw 'Invalid fixture identity; cleanup refused.' }
+        if ($sourceId -isnot [string] -or $ref -isnot [string] -or $sourceId -notmatch '^SRC_[a-f0-9]{32}$' -or $ref -notmatch '^CRED_[a-f0-9]{32}$') { throw 'Invalid fixture identity; cleanup refused.' }
         $guard="s.source_id='$sourceId' AND s.credential_ref='$ref' AND LEFT(s.source_name,8)='UI_REST_'"
         $foreignResource="SELECT 1 FROM foundation_db.data_resource r WHERE r.source_id='$sourceId' AND LEFT(r.resource_name,8)<>'UI_REST_'"
         $foreignCapability="SELECT 1 FROM foundation_db.capability c JOIN foundation_db.data_resource r ON r.resource_id=c.resource_id WHERE r.source_id='$sourceId' AND LEFT(c.capability_name,8)<>'UI_REST_'"

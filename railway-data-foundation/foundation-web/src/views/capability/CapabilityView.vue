@@ -1,16 +1,23 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { hub } from '../../utils/dataHub'
 import DemoNotice from '../../components/DemoNotice.vue'
 import StatusTag from '../../components/StatusTag.vue'
 import { capabilitySupport, validateCapability, invocationCommand } from '../../utils/capabilityForm'
+import { filterCapabilities, capabilitySaveScope } from '../../utils/capabilityCatalog'
+import { catalogPage, resourcePageSizes } from '../../utils/resourceCatalog'
+import { isDemoCapability } from '../../mock/demoData'
 
 const route = useRoute()
 const rows = ref([]), resources = ref([]), demo = ref(false)
 const dialog = ref(false), detail = ref(null), runtime = ref(null), editId = ref('')
-const saving = ref(false), busy = ref(''), filter = ref('')
+const saving = ref(false), busy = ref(''), filter = ref(typeof route.query.resource==='string'?route.query.resource:'')
+const loading=ref(false), capabilityError=ref(''), resourceError=ref(''), notices=ref([])
+const formDemo=ref(false), detailDemo=ref(false), keyword=ref(''), typeFilter=ref(''), statusFilter=ref(''), healthFilter=ref('')
+const page=ref(1), pageSize=ref(10)
+let readVersion=0, guideVersion=0
 const guideLoading = ref(false), guideError = ref(''), commandInput = ref(null)
 const types = [
   { value: 'REST_API', label: 'REST 接口' },
@@ -23,7 +30,7 @@ const authOptions = [
   { value: 'BASIC', label: '用户名密码认证' }, { value: 'SASL', label: 'SASL 认证' },
 ]
 const blank = () => ({
-  capability_name: '', resource_id: route.query.resource || '', type: 'REST_API',
+  capability_name: '', resource_id: filter.value || '', type: 'REST_API',
   http_method: 'GET', endpoint: '', topic: '', source_table: '', protocol: 'HTTP',
   auth_type: 'NONE', message_schema: '', query_template_code: '', description: '',
 })
@@ -31,30 +38,48 @@ const form = reactive(blank())
 const formAuthOptions = computed(() => authOptions.filter(a =>
   (form.type === 'KAFKA_TOPIC' ? ['NONE', 'SASL'] : ['NONE', 'TOKEN', 'BASIC']).includes(a.value)))
 const callCommand = computed(() => invocationCommand(runtime.value))
-const visible = computed(() => filter.value ? rows.value.filter(r => r.resource_id === filter.value) : rows.value)
-const selectableResources = computed(() => resources.value.filter(r => demo.value || r.status === 'PUBLISHED'))
+const visible = computed(() => filterCapabilities(rows.value,{keyword:keyword.value,resource_id:filter.value,type:typeFilter.value,status:statusFilter.value,health_status:healthFilter.value},resources.value))
+const paged=computed(()=>catalogPage(visible.value,page.value,pageSize.value))
+const selectableResources = computed(() => resources.value.filter(r => r.status === 'PUBLISHED' && (r._demo===true)===demo.value))
+const canRegister=computed(()=>!loading.value && !busy.value && !saving.value && !resourceError.value && selectableResources.value.length>0)
+const states=[{value:'DRAFT',label:'草稿'},{value:'VERIFIED',label:'已验证'},{value:'ENABLED',label:'已启用'},{value:'DISABLED',label:'已停用'},{value:'RETIRED',label:'已退役'}]
+const healths=[{value:'UNKNOWN',label:'未知'},{value:'UP',label:'正常'},{value:'DOWN',label:'异常'},{value:'DEGRADED',label:'降级'}]
+const formScopeError=computed(()=>capabilitySaveScope(form,resources.value,formDemo.value))
+watch([filter,keyword,typeFilter,statusFilter,healthFilter,pageSize],()=>{page.value=1})
+function resetFilters(){keyword.value='';filter.value='';typeFilter.value='';statusFilter.value='';healthFilter.value='';page.value=1}
 const supportedRest = row => row.type === 'REST_API' && row.http_method === 'GET' && row.auth_type === 'NONE' && row.endpoint === '/containers/events'
 const canVerify = row => ['DRAFT', 'VERIFIED', 'DISABLED'].includes(row.status) &&
-  (demo.value || supportedRest(row) || (row.type === 'KAFKA_TOPIC' && row.auth_type === 'NONE'))
+  (isDemoCapability(row.capability_id) || supportedRest(row) || (row.type === 'KAFKA_TOPIC' && row.auth_type === 'NONE'))
 const canEnable = row => ['VERIFIED', 'DISABLED'].includes(row.status) && row.health_status === 'UP' &&
-  (demo.value || supportedRest(row))
+  (isDemoCapability(row.capability_id) || supportedRest(row))
 const resourceName = id => resources.value.find(r => r.resource_id === id)?.resource_name || id
 const errorMessage = error => error.response?.data?.message ||
-  (error.code === 'ECONNABORTED' ? '接口能力操作请求超时，请刷新后检查实际状态' :
+  (error.code === 'ECONNABORTED' || error.code === 'ERR_NETWORK' ? '接口能力操作结果尚未确认，请刷新后检查实际状态，不要重复提交' :
     !error.response ? '接口能力操作请求失败，请检查后端服务' : error.message || '接口能力操作失败')
 
 async function load() {
+  const version=++readVersion
+  loading.value=true
   try {
-    const [c, r] = await Promise.all([hub.capabilities(), hub.resources()])
-    rows.value = c.rows || []
-    resources.value = r.rows || []
-    demo.value = c.demo
-    filter.value = route.query.resource || filter.value
-  } catch { ElMessage.error('接口能力加载失败') }
+    const result=await hub.capabilityCatalog(route.query.resource)
+    if(version!==readVersion)return
+    rows.value=result.capabilities.rows;resources.value=result.resources.rows;demo.value=result.demo
+    capabilityError.value=result.capabilities.error?result.capabilities.notice:''
+    resourceError.value=result.resources.error?result.resources.notice:''
+    notices.value=[['能力列表',result.capabilities],['资源选项',result.resources]].filter(([,data])=>!data.error&&!data.complete).map(([label,data])=>label+'：'+data.notice)
+    page.value=paged.value.page
+  } catch {
+    if(version!==readVersion)return
+    rows.value=[];resources.value=[];demo.value=false;notices.value=[]
+    capabilityError.value='接口能力读取失败，请刷新重试';resourceError.value='所属资源读取失败，请刷新重试'
+  } finally {if(version===readVersion)loading.value=false}
 }
 function open(row) {
+  if(saving.value || busy.value || loading.value || resourceError.value)return
+  if(!row && !canRegister.value)return ElMessage.warning('请先创建并发布资源，然后刷新资源列表')
   Object.assign(form, blank(), row || {})
   editId.value = row?.capability_id || ''
+  formDemo.value=row?isDemoCapability(row.capability_id):demo.value
   dialog.value = true
 }
 function typeChanged(type) {
@@ -72,13 +97,16 @@ function fillExample() {
   if (form.type === 'READONLY_QUERY') form.query_template_code = 'QUERY_CONTAINER_EVENT'
 }
 async function save() {
+  if(saving.value)return
+  const scope=capabilitySaveScope(form,resources.value,formDemo.value)
+  if(scope)return ElMessage.warning(scope)
   const invalid = validateCapability(form)
   if (invalid) return ElMessage.warning(invalid)
   saving.value = true
   try {
     const keys = ['capability_name', 'resource_id', 'type', 'http_method', 'endpoint', 'topic', 'source_table', 'protocol', 'auth_type', 'message_schema', 'query_template_code', 'description']
     const body = Object.fromEntries(keys.map(key => [key, form[key]]))
-    const result = await hub.saveCapability(body, editId.value || undefined, demo.value)
+    const result = await hub.saveCapability(body, editId.value || undefined, formDemo.value)
     dialog.value = false
     ElMessage.success(result.demo ? '演示能力已保存' : '能力已保存')
     await load()
@@ -86,10 +114,10 @@ async function save() {
   finally { saving.value = false }
 }
 async function action(row, name) {
-  if (busy.value) return
+  if (busy.value || saving.value || loading.value) return
   busy.value = row.capability_id + ':' + name
   try {
-    const result = await hub.capabilityAction(row.capability_id, name, demo.value)
+    const result = await hub.capabilityAction(row.capability_id, name, isDemoCapability(row.capability_id))
     if (name === 'verify' && result.value?.health_status !== 'UP') {
       ElMessage.warning(row.type === 'KAFKA_TOPIC' ? '消息主题验证未通过，请检查 Kafka 服务和主题' : '接口验证未通过，请检查提供服务与数据源')
     } else {
@@ -100,19 +128,21 @@ async function action(row, name) {
   finally { await load(); busy.value = '' }
 }
 async function showDetail(row) {
+  const version=++guideVersion
   detail.value = row
+  detailDemo.value=isDemoCapability(row.capability_id)
   runtime.value = null
   guideError.value = ''
   guideLoading.value = false
   if (supportedRest(row)) {
     guideLoading.value = true
     try {
-      const result = await hub.capabilityInvocation(row.capability_id, demo.value)
-      if (detail.value?.capability_id === row.capability_id) runtime.value = result.value
+      const result = await hub.capabilityInvocation(row.capability_id, detailDemo.value)
+      if (version===guideVersion && detail.value?.capability_id === row.capability_id) runtime.value = result.value
     } catch {
-      if (detail.value?.capability_id === row.capability_id) guideError.value = '调用信息加载失败，请检查底座服务与提供服务地址配置，或重试。'
+      if (version===guideVersion && detail.value?.capability_id === row.capability_id) guideError.value = '调用信息加载失败，请检查底座服务与提供服务地址配置，或重试。'
     } finally {
-      if (detail.value?.capability_id === row.capability_id) guideLoading.value = false
+      if (version===guideVersion && detail.value?.capability_id === row.capability_id) guideLoading.value = false
     }
   }
 }
@@ -127,6 +157,14 @@ async function copyCommand() {
   }
 }
 onMounted(async () => { await load(); if (route.query.create === '1') open() })
+watch(()=>[route.query.resource,route.query.create].join('|'),async()=>{
+  filter.value=typeof route.query.resource==='string'?route.query.resource:''
+  detail.value=null;++guideVersion
+  if(!saving.value)dialog.value=false
+  await load()
+  if(route.query.create==='1')open()
+})
+onBeforeUnmount(()=>{readVersion++;guideVersion++})
 </script>
 
 <template>
@@ -138,17 +176,27 @@ onMounted(async () => { await load(); if (route.query.create === '1') open() })
         <p>登记访问方式，验证连接后启用接口，按需停用</p>
       </div>
       <div style="display:flex;gap:8px">
-        <el-select v-model="filter" clearable placeholder="全部资源" style="width:230px">
-          <el-option v-for="r in resources" :key="r.resource_id" :label="r.resource_name" :value="r.resource_id" />
-        </el-select>
-        <el-button type="primary" @click="open()">＋ 注册接口能力</el-button>
+        <el-button :loading="loading" :disabled="!!busy || saving" @click="load">刷新列表</el-button>
+        <el-button type="primary" :disabled="!canRegister" @click="open()">＋ 注册接口能力</el-button>
       </div>
     </div>
     <DemoNotice :show="demo" text="当前为演示数据，能力操作仅影响当前浏览器。" />
+    <el-alert v-if="capabilityError" :title="capabilityError" description="不展示旧能力列表或演示能力，请检查后端服务后刷新。" type="error" :closable="false" show-icon data-testid="capability-list-error" />
+    <el-alert v-if="resourceError" :title="resourceError" description="不能注册或编辑能力；已读取的能力仍可查看或进行支持的验证、启停。不会混入演示资源。" type="error" :closable="false" show-icon data-testid="capability-resource-error" />
+    <el-alert v-if="notices.length" :title="notices.join('；')" description="筛选、分页和资源选择仅涵盖已读取记录，每类最多5,000条。" type="warning" :closable="false" show-icon />
     <el-alert v-if="!demo" title="集装箱事件 REST 查询接口支持真实验证、启用和停用；Kafka 可验证主题元数据，其他类型暂未接入运行时启停。" type="info" :closable="false" show-icon />
     <div class="panel">
-      <div class="panel-title">能力列表 <span class="panel-sub">{{ visible.length }} 项</span></div>
-      <el-table :data="visible" empty-text="暂无接口能力">
+      <div class="panel-title">能力列表 <span class="panel-sub" data-testid="capability-count">{{ capabilityError?'读取失败':'已读取 '+rows.length+' 项 · 匹配 '+visible.length+' 项' }}</span></div>
+      <el-form label-position="top" class="capability-filters">
+        <el-form-item label="关键词" class="keyword"><el-input v-model="keyword" clearable maxlength="200" placeholder="搜索能力名称、编号、资源或访问地址" /></el-form-item>
+        <el-form-item label="关联资源"><el-select v-model="filter" clearable filterable placeholder="全部资源"><el-option v-for="r in resources" :key="r.resource_id" :label="r.resource_name" :value="r.resource_id" /></el-select></el-form-item>
+        <el-form-item label="能力类型"><el-select v-model="typeFilter" clearable placeholder="全部类型"><el-option v-for="t in types" :key="t.value" :label="t.label" :value="t.value" /></el-select></el-form-item>
+        <el-form-item label="能力状态"><el-select v-model="statusFilter" clearable placeholder="全部状态"><el-option v-for="s in states" :key="s.value" :label="s.label" :value="s.value" /></el-select></el-form-item>
+        <el-form-item label="健康状态"><el-select v-model="healthFilter" clearable placeholder="全部健康状态"><el-option v-for="h in healths" :key="h.value" :label="h.label" :value="h.value" /></el-select></el-form-item>
+        <el-button @click="resetFilters">重置筛选</el-button>
+      </el-form>
+      <p class="scope-note">检索在本次已读取的元数据中执行，空格分隔的关键词需同时匹配；健康状态表示最近一次验证结果。</p>
+      <el-table v-if="!capabilityError" :data="paged.rows" v-loading="loading" empty-text="暂无符合条件的接口能力" data-testid="capability-table">
         <el-table-column prop="capability_name" label="能力名称" min-width="200" fixed="left" show-overflow-tooltip />
         <el-table-column label="所属资源" min-width="190" show-overflow-tooltip>
           <template #default="{row}">{{ row.resource_name || resourceName(row.resource_id) }}</template>
@@ -165,17 +213,20 @@ onMounted(async () => { await load(); if (route.query.create === '1') open() })
           <template #default="{row}">
             <div class="table-actions">
               <el-button link type="primary" @click="showDetail(row)">查看</el-button>
-              <el-button link type="primary" :disabled="!!busy || row.status !== 'DRAFT'" @click="open(row)">编辑</el-button>
-              <el-button link type="primary" :loading="busy === row.capability_id + ':verify'" :disabled="!!busy || !canVerify(row)" @click="action(row,'verify')">验证</el-button>
-              <el-button v-if="row.status !== 'ENABLED'" link type="primary" :loading="busy === row.capability_id + ':enable'" :disabled="!!busy || !canEnable(row)" @click="action(row,'enable')">启用</el-button>
-              <el-button v-else link type="warning" :loading="busy === row.capability_id + ':disable'" :disabled="!!busy || (!demo && !supportedRest(row))" @click="action(row,'disable')">停用</el-button>
+              <el-button link type="primary" :disabled="!!busy || loading || !!resourceError || row.status !== 'DRAFT'" @click="open(row)">编辑</el-button>
+              <el-button link type="primary" :loading="busy === row.capability_id + ':verify'" :disabled="!!busy || loading || !canVerify(row)" @click="action(row,'verify')">验证</el-button>
+              <el-button v-if="row.status !== 'ENABLED'" link type="primary" :loading="busy === row.capability_id + ':enable'" :disabled="!!busy || loading || !canEnable(row)" @click="action(row,'enable')">启用</el-button>
+              <el-button v-else link type="warning" :loading="busy === row.capability_id + ':disable'" :disabled="!!busy || loading || (!isDemoCapability(row.capability_id) && !supportedRest(row))" @click="action(row,'disable')">停用</el-button>
             </div>
           </template>
         </el-table-column>
       </el-table>
+      <div v-if="!capabilityError" class="capability-pagination"><span>已读取结果分页</span><el-pagination :current-page="paged.page" v-model:page-size="pageSize" :page-sizes="resourcePageSizes" :total="visible.length" layout="sizes,prev,pager,next,jumper" :disabled="loading" @current-change="page=$event" /></div>
     </div>
 
-    <el-dialog v-model="dialog" :title="editId ? '编辑接口能力' : '注册接口能力'" width="760px">
+    <el-dialog v-model="dialog" :title="editId ? '编辑接口能力' : '注册接口能力'" width="760px" :show-close="!saving" :close-on-press-escape="!saving" :close-on-click-modal="false">
+      <el-alert :title="formDemo?'本次保存演示能力，仅影响当前浏览器。':'本次保存真实能力，接口失败不会模拟成功。'" :type="formDemo?'warning':'info'" :closable="false" show-icon class="form-notice" />
+      <el-alert v-if="formScopeError" :title="formScopeError" type="warning" :closable="false" show-icon class="form-notice" />
       <el-alert :title="capabilitySupport[form.type]" type="info" :closable="false" show-icon class="form-notice" />
       <div class="form-toolbar"><span>关联资源 → 填写访问方式 → 保存 → 验证 → 启用</span><el-button link type="primary" @click="fillExample">填入本机示例配置</el-button></div>
       <el-form label-position="top">
@@ -211,10 +262,10 @@ onMounted(async () => { await load(); if (route.query.create === '1') open() })
         <el-form-item v-if="form.type === 'KAFKA_TOPIC'" label="消息结构"><el-input v-model="form.message_schema" type="textarea" :rows="2" placeholder="描述消息包含哪些字段及其类型，可填写 JSON 结构" /></el-form-item>
         <el-form-item label="描述"><el-input v-model="form.description" type="textarea" :rows="2" placeholder="说明用途、查询条件或消息更新方式，不填写密码或令牌" /></el-form-item>
       </el-form>
-      <template #footer><el-button @click="dialog=false">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存能力</el-button></template>
+      <template #footer><el-button :disabled="saving" @click="dialog=false">取消</el-button><el-button type="primary" :loading="saving" :disabled="!!formScopeError" @click="save">保存能力</el-button></template>
     </el-dialog>
 
-    <el-dialog :model-value="!!detail" title="接口能力详情" width="900px" @close="detail=null">
+    <el-dialog :model-value="!!detail" title="接口能力详情" width="900px" @close="detail=null;guideVersion++">
       <template v-if="detail">
         <el-descriptions :column="2" border>
           <el-descriptions-item label="能力名称" :span="2">{{ detail.capability_name }}</el-descriptions-item>
@@ -243,7 +294,7 @@ onMounted(async () => { await load(); if (route.query.create === '1') open() })
             <p>提供服务地址 + 接口路径组成完整地址。提供服务直接读取业务数据库；底座负责检查能力状态。</p>
             <div class="guide-heading"><strong>PowerShell 调用示例</strong><el-button size="small" @click="copyCommand">复制调用命令</el-button></div>
             <el-input ref="commandInput" :model-value="callCommand" type="textarea" :rows="3" readonly aria-label="PowerShell 调用命令" class="command-input" />
-            <p class="panel-sub">{{ demo ? '演示配置与编号仅供展示，不能直接查询真实服务。' : '复制到 VS Code 的 PowerShell 终端执行。未启用或已停用时会被拒绝；地址须能从调用方访问。' }}</p>
+            <p class="panel-sub">{{ detailDemo ? '演示配置与编号仅供展示，不能直接查询真实服务。' : '复制到 VS Code 的PowerShell终端执行。未启用或已停用时会被拒绝；地址须能从调用方访问。' }}</p>
           </template>
         </div>
         <el-alert v-else :title="capabilitySupport[detail.type]" type="info" :closable="false" show-icon style="margin-top:16px" />
@@ -263,4 +314,10 @@ onMounted(async () => { await load(); if (route.query.create === '1') open() })
 .field-help { color: #64748b; font-size: 13px; line-height: 1.6; margin-top: 6px; }
 .command-input { margin-top: 8px; }
 .command-input :deep(textarea) { font-family: Consolas, monospace; font-size: 13px; line-height: 1.6; }
+.capability-filters { display:grid; grid-template-columns:minmax(240px,2fr) repeat(4,minmax(130px,1fr)) auto; gap:12px; align-items:end; }
+.capability-filters .el-form-item { margin-bottom:0; }
+.scope-note { font-size:12px; color:#718497; line-height:1.7; margin:14px 0; }
+.capability-pagination { display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap; margin-top:20px; font-size:12px; color:#718497; }
+@media(max-width:1500px) { .capability-filters { grid-template-columns:repeat(3,minmax(0,1fr)); } .keyword { grid-column:span 2; } }
+@media(max-width:760px) { .capability-filters { grid-template-columns:1fr; } .keyword { grid-column:auto; } }
 </style>

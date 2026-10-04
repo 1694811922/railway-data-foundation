@@ -18,6 +18,10 @@ function config(name,variable){const uri=new URL(process.env[variable].slice(5))
 function assert(condition,message){if(!condition)throw new Error(message)}
 async function screenshot(page,name){await page.locator('.el-message').last().waitFor({state:'hidden'});await page.screenshot({path:`.runtime/${name}.png`,fullPage:true})}
 async function body(response){assert(response.ok(),`Unexpected API HTTP ${response.status()}`);const json=await response.json();assert(json.code===0,'API returned an error');assert(!Object.hasOwn(json.data,'password'),'API echoed password');return json.data}
+async function recordSource(source){
+  created.push({source_id:source.source_id,credential_ref:source.credential_ref,source_name:source.source_name})
+  await mkdir('.runtime',{recursive:true});await writeFile('.runtime/source-live-fixtures.json',JSON.stringify(created,null,2))
+}
 try{
   await server.listen()
   browser=await chromium.launch({executablePath:process.env.FOUNDATION_BROWSER || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',headless:true})
@@ -35,11 +39,11 @@ try{
   await mkdir('.runtime',{recursive:true});await screenshot(page,'source-dialog')
   const responsePromise=page.waitForResponse(r=>r.url().endsWith('/api/v1/sources')&&r.request().method()==='POST')
   await dialog.getByRole('button',{name:'保存并测试连接'}).click()
-  const portSource=await body(await responsePromise);created.push({source_id:portSource.source_id,credential_ref:portSource.credential_ref,source_name:portSource.source_name})
+  const portSource=await body(await responsePromise);await recordSource(portSource)
   await page.getByText('连接成功',{exact:true}).first().waitFor()
   assert(await page.evaluate(secret=>Object.values(localStorage).every(v=>!v.includes(secret)),portConfig.password),'Password persisted in browser')
   const dispatchConfig=config(`UI_DYNAMIC_调度_${run}`,'TEST_SECOND_SOURCE_DB_URL')
-  const dispatchSource=await body(await page.request.post(`${api}/sources`,{data:dispatchConfig}));created.push({source_id:dispatchSource.source_id,credential_ref:dispatchSource.credential_ref,source_name:dispatchSource.source_name})
+  const dispatchSource=await body(await page.request.post(`${api}/sources`,{data:dispatchConfig}));await recordSource(dispatchSource)
   await page.reload({waitUntil:'networkidle'})
   const portRow=page.getByRole('row').filter({hasText:portConfig.source_name})
   await portRow.getByRole('button',{name:'编辑',exact:true}).click()
@@ -53,7 +57,7 @@ try{
   const testUrl=`**/sources/${portSource.source_id}/test`
   await page.route(testUrl,route=>route.abort('timedout'))
   await portRow.getByRole('button',{name:'测试连接',exact:true}).click()
-  await page.getByText('连接测试请求失败，请检查后端服务',{exact:true}).waitFor()
+  await page.getByText('连接测试请求失败，请检查后端服务',{exact:true}).first().waitFor()
   assert(await page.getByText('演示连接成功',{exact:true}).count()===0,'Real connection failure became a mock success')
   await page.unroute(testUrl)
   await screenshot(page,'source-list')

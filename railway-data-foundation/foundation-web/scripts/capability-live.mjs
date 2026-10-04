@@ -95,7 +95,7 @@ try {
   const actionUrl = '**/capabilities/' + id + '/disable'
   await page.route(actionUrl, route => route.abort('timedout'))
   await row.getByRole('button', { name: '停用', exact: true }).click()
-  await page.getByText(/接口能力操作请求(失败|超时)/).waitFor()
+  await page.getByText(/接口能力操作(请求(失败|超时)|结果尚未确认)/).waitFor()
   await row.getByText('已启用', { exact: true }).waitFor()
   assert((await data(await query())).length === 1, 'Failed request became a mock stop')
   await page.unroute(actionUrl)

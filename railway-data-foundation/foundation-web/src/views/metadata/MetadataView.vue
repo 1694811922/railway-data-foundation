@@ -1,48 +1,166 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { hub } from '../../utils/dataHub'
 import DemoNotice from '../../components/DemoNotice.vue'
 import StatusTag from '../../components/StatusTag.vue'
 import { displayTime } from '../../utils/time'
-import { canUseDemo } from '../../utils/request'
+import { filterScanTasks, filterMetadataRows, scanSourceError } from '../../utils/scanCatalog'
+import { catalogPage, resourcePageSizes } from '../../utils/resourceCatalog'
 const router=useRouter(), route=useRoute()
 const tasks=ref([]), sources=ref([]), tables=ref([]), fields=ref([])
 const selected=ref(null), selectedTable=ref(null), selectedSource=ref(''), demo=ref(false), tablesDemo=ref(false), drawer=ref(false), loading=ref(false), scanning=ref(false), resultsLoading=ref(false)
 const fieldTask=ref(null)
-let selectionVersion=0, fieldVersion=0
-async function load(){loading.value=true;try{const [t,s]=await Promise.all([hub.tasks(),hub.sources()]);tasks.value=t.rows||[];sources.value=s.rows||[];demo.value=t.demo;if(!selected.value&&tasks.value.length)await select(tasks.value.find(t=>t.task_id===route.query.task)||tasks.value[0])}catch{ElMessage.error('扫描任务加载失败')}finally{loading.value=false}}
-async function select(task){selected.value=task;tables.value=[];fields.value=[];drawer.value=false;selectedTable.value=null;fieldTask.value=null;tablesDemo.value=false;++fieldVersion;const version=++selectionVersion;resultsLoading.value=true;try{const result=await hub.tables(task.task_id);if(version===selectionVersion){tables.value=result.rows||[];tablesDemo.value=result.demo}}catch{if(version===selectionVersion)ElMessage.error('扫描结果加载失败，请重试')}finally{if(version===selectionVersion)resultsLoading.value=false}}
-async function showFields(table){const task=selected.value,version=++fieldVersion;fields.value=[];try{const result=await hub.fieldsForTask(task.task_id,table.table_name);if(version!==fieldVersion||selected.value?.task_id!==task.task_id)return;selectedTable.value=table;fieldTask.value=task;fields.value=result.rows||[];tablesDemo.value ||= result.demo;drawer.value=true}catch{if(version===fieldVersion)ElMessage.error('字段加载失败，请重试')}}
-async function scan(){const source=sources.value.find(s=>s.source_id===selectedSource.value);if(!source){ElMessage.warning('请选择数据源');return}scanning.value=true;try{const result=await hub.startScan(source);if(result.value.status==='FAILED')ElMessage.error(result.value.failure_reason||'扫描失败');else ElMessage.success(result.demo?'演示扫描完成':'扫描完成');selected.value=null;await load();const task=tasks.value.find(t=>t.task_id===result.value.task_id);if(task)await select(task)}catch(e){if(canUseDemo(e))ElMessage.error('扫描请求失败，请检查后端服务后重试')}finally{scanning.value=false}}
+const taskError=ref(''), sourceError=ref(''), selectionError=ref(''), tableError=ref(''), fieldError=ref(''), fieldsLoading=ref(false), notices=ref([])
+const keyword=ref(''), sourceFilter=ref(''), statusFilter=ref(''), tableKeyword=ref(''), fieldKeyword=ref(''), page=ref(1), pageSize=ref(10)
+let readVersion=0, selectionVersion=0, fieldVersion=0
+const states=[{value:'PENDING',label:'待执行'},{value:'RUNNING',label:'执行中'},{value:'SUCCESS',label:'成功'},{value:'FAILED',label:'失败'}]
+const visibleTasks=computed(()=>filterScanTasks(tasks.value,{keyword:keyword.value,source_id:sourceFilter.value,status:statusFilter.value}))
+const taskPage=computed(()=>catalogPage(visibleTasks.value,page.value,pageSize.value))
+const visibleTables=computed(()=>filterMetadataRows(tables.value,tableKeyword.value,['table_name','schema_name','table_comment']))
+const visibleFields=computed(()=>filterMetadataRows(fields.value,fieldKeyword.value,['field_name','column_type','data_type','technical_comment']))
+const canScan=computed(()=>!loading.value && !scanning.value && !sourceError.value && !scanSourceError(sources.value.find(s=>s.source_id===selectedSource.value),demo.value))
+watch([keyword,sourceFilter,statusFilter,pageSize],()=>{page.value=1})
+function resetFilters(){keyword.value='';sourceFilter.value='';statusFilter.value='';page.value=1}
+function clearSelection(){
+  ++selectionVersion;++fieldVersion
+  selected.value=null;tables.value=[];fields.value=[];drawer.value=false;selectedTable.value=null;fieldTask.value=null
+  tableError.value='';fieldError.value='';resultsLoading.value=false;fieldsLoading.value=false;tablesDemo.value=false
+  tableKeyword.value='';fieldKeyword.value=''
+}
+async function load(preferredId){
+  const targetId=typeof preferredId==='string'?preferredId:selected.value?.task_id || (typeof route.query.task==='string'?route.query.task:'')
+  const version=++readVersion
+  clearSelection();selectionError.value='';loading.value=true
+  try{
+    const result=await hub.scanCatalog(route.query.task)
+    if(version!==readVersion)return
+    tasks.value=result.tasks.rows;sources.value=result.sources.rows;demo.value=result.demo
+    taskError.value=result.tasks.error?result.tasks.notice:'';sourceError.value=result.sources.error?result.sources.notice:''
+    notices.value=[['任务列表',result.tasks],['数据源选项',result.sources]].filter(([,data])=>!data.error&&!data.complete).map(([label,data])=>label+'：'+data.notice)
+    if(!sources.value.some(s=>s.source_id===selectedSource.value))selectedSource.value=''
+    if(taskError.value)return
+    let task=targetId?tasks.value.find(t=>t.task_id===targetId):tasks.value[0]
+    if(targetId&&!task){
+      try{
+        const direct=await hub.scanTask(targetId)
+        if(version!==readVersion)return
+        if(!direct.value || direct.value.task_id!==targetId || direct.demo!==demo.value)throw new Error('invalid task')
+        task=direct.value;tasks.value=[task,...tasks.value]
+        notices.value.push('指定任务不在本次列表范围内，已通过任务详情接口单独加载')
+      }catch{if(version===readVersion)selectionError.value='指定扫描任务读取失败，请确认任务编号后刷新重试';return}
+    }
+    page.value=taskPage.value.page
+    if(task)await select(task)
+  }catch{
+    if(version!==readVersion)return
+    tasks.value=[];sources.value=[];demo.value=false;notices.value=[]
+    taskError.value='扫描任务读取失败，请刷新重试';sourceError.value='数据源选项读取失败，请刷新重试'
+  }finally{if(version===readVersion)loading.value=false}
+}
+async function select(task){
+  clearSelection();selectionError.value='';selected.value=task
+  const version=selectionVersion
+  if(task.status!=='SUCCESS')return
+  resultsLoading.value=true
+  try{
+    const result=await hub.tables(task.task_id)
+    if(version===selectionVersion){tables.value=result.rows||[];tablesDemo.value=result.demo}
+  }catch{if(version===selectionVersion)tableError.value='扫描结果加载失败，请重试'}
+  finally{if(version===selectionVersion)resultsLoading.value=false}
+}
+async function showFields(table){
+  const task=selected.value
+  if(!task || task.status!=='SUCCESS' || resultsLoading.value || tableError.value)return
+  const version=++fieldVersion
+  fields.value=[];fieldError.value='';fieldKeyword.value='';selectedTable.value=table;fieldTask.value=task;drawer.value=true;fieldsLoading.value=true
+  try{
+    const result=await hub.fieldsForTask(task.task_id,table.table_name)
+    if(version!==fieldVersion||selected.value?.task_id!==task.task_id)return
+    fields.value=result.rows||[];tablesDemo.value ||= result.demo
+  }catch{if(version===fieldVersion)fieldError.value='字段加载失败，请重试'}
+  finally{if(version===fieldVersion)fieldsLoading.value=false}
+}
+function closeFields(){++fieldVersion;fieldsLoading.value=false}
+async function scan(){
+  if(scanning.value || loading.value)return
+  const source=sources.value.find(s=>s.source_id===selectedSource.value), invalid=scanSourceError(source,demo.value)
+  if(sourceError.value || invalid)return ElMessage.warning(sourceError.value || invalid)
+  scanning.value=true
+  try{
+    const result=await hub.startScan(source)
+    if(result.value.status==='FAILED')ElMessage.error(result.value.failure_reason||'扫描失败')
+    else ElMessage.success(result.demo?'演示扫描完成':'扫描完成')
+    await load(result.value.task_id)
+  }catch(e){ElMessage.error(e.code==='ECONNABORTED'||e.code==='ERR_NETWORK'?'扫描请求结果尚未确认，请刷新任务检查，不要重复发起扫描':e.response?.data?.message || '扫描请求失败，请检查后端服务')}
+  finally{scanning.value=false}
+}
 function create(table,task=selected.value){if(!table||task?.status!=='SUCCESS'){ElMessage.warning('请先选择成功的扫描结果');return}router.push({path:'/resources',query:{fromTable:table.table_name,schema:table.schema_name,source:task.source_id,sourceName:task.source_name,task:task.task_id}})}
-onMounted(load)
+onMounted(()=>load())
+watch(()=>route.query.task,()=>{page.value=1;load(typeof route.query.task==='string'?route.query.task:'')})
+onBeforeUnmount(()=>{++readVersion;clearSelection()})
 </script>
 <template><div class="stack">
-  <div class="page-heading"><div><div class="eyebrow">接入管理</div><h1>元数据扫描</h1><p>只读取数据库结构，不读取或保存业务明细</p></div><div style="display:flex;gap:8px"><el-select v-model="selectedSource" placeholder="选择已启用的数据源" style="width:240px"><el-option v-for="s in sources" :key="s.source_id" :value="s.source_id" :label="s.source_name" :disabled="s.status==='DISABLED'" /></el-select><el-button type="primary" :loading="scanning" @click="scan">开始扫描</el-button><el-button @click="load">刷新任务</el-button></div></div>
-  <DemoNotice :show="demo||tablesDemo" text="当前展示演示扫描结果，请检查后端服务或演示模式配置。" />
-  <div class="grid-2" style="grid-template-columns:minmax(320px,.85fr) minmax(500px,1.5fr)">
-    <div class="panel"><div class="panel-title">扫描任务 <span class="panel-sub">{{ tasks.length }} 条记录</span></div><div v-loading="loading">
-      <div v-for="task in tasks" :key="task.task_id" :data-task-id="task.task_id" @click="select(task)" :style="{borderColor:selected?.task_id===task.task_id?'#79bcc7':'#e8eef2',background:selected?.task_id===task.task_id?'#f1f9fa':'#fff'}" style="cursor:pointer;border:1px solid;border-radius:10px;padding:14px;margin-bottom:10px">
+  <div class="page-heading"><div><div class="eyebrow">接入管理</div><h1>元数据扫描</h1><p>只读取数据库结构，不读取或保存业务明细</p></div><div class="scan-actions"><el-select v-model="selectedSource" filterable placeholder="选择已启用的数据源" style="width:240px" :disabled="loading||scanning||!!sourceError"><el-option v-for="s in sources" :key="s.source_id" :value="s.source_id" :label="s.source_name" :disabled="s.status!=='ENABLED'" /></el-select><el-button type="primary" :loading="scanning" :disabled="!canScan" @click="scan">开始扫描</el-button><el-button :loading="loading" :disabled="scanning" @click="load()">刷新任务</el-button></div></div>
+  <DemoNotice :show="demo||tablesDemo" text="当前为演示扫描，操作仅影响当前浏览器，不代表真实数据库状态。" />
+  <el-alert v-if="taskError" :title="taskError" description="已清空任务和扫描结果，不使用演示任务替代。" type="error" :closable="false" show-icon data-testid="scan-task-error" />
+  <el-alert v-if="sourceError" :title="sourceError" description="暂时不能发起扫描；已读取的任务仍可查看。" type="error" :closable="false" show-icon data-testid="scan-source-error" />
+  <el-alert v-if="notices.length" :title="notices.join('；')" description="检索仅涵盖已读取元数据；列表每类最多读取5,000条。" type="warning" :closable="false" show-icon />
+  <div class="grid-2 scan-workspace">
+    <div class="panel"><div class="panel-title">扫描任务 <span class="panel-sub" data-testid="scan-task-count">已读取 {{ tasks.length }} 项 · 匹配 {{ visibleTasks.length }} 项</span></div>
+      <el-form label-position="top" class="task-filters">
+        <el-form-item label="任务关键词" class="task-keyword"><el-input v-model="keyword" clearable maxlength="200" placeholder="任务编号、来源名称或失败原因" /></el-form-item>
+        <el-form-item label="任务来源"><el-select v-model="sourceFilter" clearable filterable placeholder="全部来源"><el-option v-for="s in sources" :key="s.source_id" :value="s.source_id" :label="s.source_name" /></el-select></el-form-item>
+        <el-form-item label="任务状态"><el-select v-model="statusFilter" clearable placeholder="全部状态"><el-option v-for="s in states" :key="s.value" :value="s.value" :label="s.label" /></el-select></el-form-item>
+      </el-form><div class="task-tools"><span>空格分隔的关键词需同时匹配</span><el-button link type="primary" @click="resetFilters">重置筛选</el-button></div>
+      <div v-if="!taskError" v-loading="loading" class="task-scroll">
+      <div v-for="task in taskPage.rows" :key="task.task_id" :data-task-id="task.task_id" @click="select(task)" :class="['task-card',{active:selected?.task_id===task.task_id}]">
         <div style="display:flex;justify-content:space-between;gap:5px"><strong>{{ task.source_name || task.source_id }}</strong><StatusTag :value="task.status" /></div>
-        <div class="id-text" style="margin:7px 0">扫描任务编号：{{ task.task_id }}</div>
+        <div class="id-text task-id">扫描任务编号：{{ task.task_id }}</div>
         <div class="dim" style="font-size:13px;line-height:1.8">发现表数量：{{ task.table_count ?? '—' }} · 发现字段数量：{{ task.field_count ?? '—' }}<br>开始时间：{{ displayTime(task.started_at) }}<br>完成时间：{{ displayTime(task.finished_at) }}</div>
         <el-button link type="primary" @click.stop="select(task)">查看扫描结果</el-button>
-      </div><div v-if="!tasks.length" class="empty-hint">暂无扫描任务，请选择数据源开始扫描</div>
-    </div></div>
-    <div class="panel"><div class="panel-title">扫描结果 <span class="panel-sub">{{ selected?.source_name || '请选择任务' }}</span></div>
+        <p v-if="task.status==='FAILED'" class="task-failure">{{ task.failure_reason || '扫描失败，请查看任务并检查连接权限' }}</p>
+      </div><div v-if="!visibleTasks.length" class="empty-hint">{{ tasks.length?'没有符合条件的任务':'暂无扫描任务，请选择数据源开始扫描' }}</div>
+      </div><el-pagination v-if="!taskError" class="task-pager" :current-page="taskPage.page" v-model:page-size="pageSize" :page-sizes="resourcePageSizes" :total="visibleTasks.length" layout="sizes,prev,pager,next" :pager-count="5" :disabled="loading" @current-change="page=$event" />
+    </div>
+    <div class="panel scan-results"><div class="panel-title">扫描结果 <span class="panel-sub">{{ selected?.source_name || selected?.source_id || '请选择任务' }}</span></div>
+      <el-alert v-if="selectionError" :title="selectionError" type="error" :closable="false" show-icon data-testid="scan-selection-error" />
+      <el-descriptions v-if="selected" :column="2" border class="selected-summary"><el-descriptions-item label="任务编号" :span="2"><span class="id-text">{{ selected.task_id }}</span></el-descriptions-item><el-descriptions-item label="任务状态"><StatusTag :value="selected.status" /></el-descriptions-item><el-descriptions-item label="发现表／字段">{{ selected.table_count ?? '—' }} / {{ selected.field_count ?? '—' }}</el-descriptions-item></el-descriptions>
       <el-alert v-if="selected?.status==='FAILED'" :title="selected.failure_reason || '扫描失败，请检查连接和账号权限'" type="error" :closable="false" style="margin-bottom:16px" />
-      <el-table :data="tables" v-loading="resultsLoading" empty-text="暂无扫描结果">
+      <el-alert v-if="selected && ['PENDING','RUNNING'].includes(selected.status)" title="任务尚未完成，请刷新任务查看最新状态" type="info" :closable="false" show-icon />
+      <div v-if="selected?.status==='SUCCESS'" class="result-tools"><el-input v-model="tableKeyword" clearable placeholder="搜索表名、数据库模式或表说明" aria-label="扫描表关键词" /><el-button :loading="resultsLoading" @click="select(selected)">重新加载结果</el-button></div>
+      <el-alert v-if="tableError" :title="tableError" description="不会使用其他任务或演示表替代，请点击重新加载结果。" type="error" :closable="false" show-icon data-testid="scan-table-error" />
+      <el-table v-if="!tableError" :data="visibleTables" v-loading="resultsLoading" empty-text="暂无符合条件的扫描结果" data-testid="scan-table-list">
         <el-table-column prop="table_name" label="表名" min-width="150" /><el-table-column prop="table_comment" label="表说明" min-width="155" /><el-table-column prop="field_count" label="字段数量" width="95" /><el-table-column prop="estimated_rows" label="估算记录数" width="105" />
         <el-table-column label="扫描状态" width="100"><template #default><StatusTag :value="selected?.status || 'SUCCESS'" /></template></el-table-column>
-        <el-table-column label="操作" min-width="160"><template #default="{row}"><el-button link type="primary" @click="showFields(row)">查看字段</el-button><el-button link type="primary" @click="create(row)">创建资源</el-button></template></el-table-column>
+        <el-table-column label="操作" min-width="160"><template #default="{row}"><el-button link type="primary" :disabled="resultsLoading||selected?.status!=='SUCCESS'" @click="showFields(row)">查看字段</el-button><el-button link type="primary" :disabled="resultsLoading||selected?.status!=='SUCCESS'" @click="create(row)">创建资源</el-button></template></el-table-column>
       </el-table><p class="dim">估算记录数来自数据库元数据，不代表实际共享量。</p>
     </div>
   </div>
-  <el-drawer v-model="drawer" :title="`${selectedTable?.table_name || ''} · 字段详情`" :size="1080" style="max-width:95vw">
+  <el-drawer v-model="drawer" :title="`${selectedTable?.table_name || ''} · 字段详情`" :size="1080" style="max-width:95vw" @close="closeFields">
     <p class="dim">{{ selectedTable?.table_comment }} · {{ fields.length }} 个字段</p>
-    <el-table :data="fields"><el-table-column prop="field_name" label="字段名称" min-width="145" /><el-table-column label="字段类型" min-width="145"><template #default="{row}">{{ row.column_type || row.data_type }}</template></el-table-column><el-table-column label="是否主键" width="95"><template #default="{row}">{{ row.primary_key?'是':'否' }}</template></el-table-column><el-table-column label="是否允许为空" width="120"><template #default="{row}">{{ row.nullable?'是':'否' }}</template></el-table-column><el-table-column prop="default_value" label="默认值" width="95" /><el-table-column prop="technical_comment" label="字段说明" min-width="185" /><el-table-column label="字段顺序" width="100"><template #default="{row,$index}">{{ row.ordinal_position || $index+1 }}</template></el-table-column></el-table>
-    <template #footer><el-button type="primary" @click="create(selectedTable,fieldTask)">从此表创建资源</el-button></template>
+    <div class="result-tools"><el-input v-model="fieldKeyword" clearable placeholder="搜索字段名、类型或注释" aria-label="扫描字段关键词" /><el-button :loading="fieldsLoading" @click="showFields(selectedTable)">重新加载字段</el-button></div>
+    <el-alert v-if="fieldError" :title="fieldError" description="未使用演示字段，请重试。" type="error" :closable="false" show-icon data-testid="scan-field-error" />
+    <el-table v-if="!fieldError" :data="visibleFields" v-loading="fieldsLoading" empty-text="暂无符合条件的字段" data-testid="scan-field-list"><el-table-column prop="field_name" label="字段名称" min-width="145" /><el-table-column label="字段类型" min-width="145"><template #default="{row}">{{ row.column_type || row.data_type }}</template></el-table-column><el-table-column label="是否主键" width="95"><template #default="{row}">{{ row.primary_key?'是':'否' }}</template></el-table-column><el-table-column label="是否允许为空" width="120"><template #default="{row}">{{ row.nullable?'是':'否' }}</template></el-table-column><el-table-column prop="default_value" label="默认值" width="95" /><el-table-column prop="technical_comment" label="字段说明" min-width="185" /><el-table-column label="字段顺序" width="100"><template #default="{row,$index}">{{ row.ordinal_position || $index+1 }}</template></el-table-column></el-table>
+    <template #footer><el-button type="primary" :disabled="fieldsLoading||!!fieldError||fieldTask?.status!=='SUCCESS'" @click="create(selectedTable,fieldTask)">从此表创建资源</el-button></template>
   </el-drawer>
 </div></template>
+<style scoped>
+.scan-actions { display:flex;gap:8px;flex-wrap:wrap; }
+.scan-workspace { grid-template-columns:minmax(380px,.85fr) minmax(0,1.5fr);align-items:start; }
+.task-filters { display:grid;grid-template-columns:1fr 1fr;gap:12px; }
+.task-keyword { grid-column:span 2; }
+.task-filters .el-form-item { margin-bottom:0; }
+.task-tools { display:flex;justify-content:space-between;align-items:center;margin:12px 0;font-size:12px;color:#718497; }
+.task-scroll { max-height:620px;overflow:auto; }
+.task-card { cursor:pointer;border:1px solid #e8eef2;border-radius:10px;padding:14px;margin-bottom:10px; }
+.task-card.active { border-color:#79bcc7;background:#f1f9fa; }
+.task-id { margin:7px 0;overflow-wrap:anywhere; }
+.task-failure { font-size:12px;color:#b95151;line-height:1.6;margin:6px 0 0; }
+.task-pager { margin-top:16px;flex-wrap:wrap;gap:6px; }
+.selected-summary { margin-bottom:16px;overflow-wrap:anywhere; }
+.result-tools { display:flex;gap:12px;margin:16px 0; }
+.scan-results { min-width:0; }
+@media(max-width:1100px) { .scan-workspace { grid-template-columns:1fr; } }
+</style>

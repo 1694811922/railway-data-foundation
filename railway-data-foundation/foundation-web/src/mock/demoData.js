@@ -71,6 +71,10 @@ export const isDemoResource = id => /^RES_(?:DEMO_[A-Z0-9]+|[0-9]{6})$/.test(id 
   && demoStore.list('resources').some(r => r.resource_id === id && r._demo === true)
 export const isDemoSource = id => /^SRC_DEMO_[A-Z0-9_]+$/.test(id || '')
   && demoStore.list('sources').some(r => r.source_id === id && r._demo === true)
+export const isDemoCapability = id => /^CAP_(?:DEMO_[A-Z0-9]+|[0-9]{6})$/.test(id || '')
+  && demoStore.list('capabilities').some(r=>r.capability_id===id && r._demo===true)
+export const isDemoTask = id => /^SCAN_DEMO_[A-Z0-9]+$/.test(id || '')
+  && demoStore.list('tasks').some(row=>row.task_id===id && row._demo===true)
 
 export function nextDemoId(prefix) { return `${prefix}_DEMO_${Date.now().toString(36).toUpperCase()}` }
 
