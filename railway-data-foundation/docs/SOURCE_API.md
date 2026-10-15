@@ -1,6 +1,10 @@
 # 动态多数据源接入接口（MySQL MVP）
 
+V14权限补充：本接口仅管理员及归属提供方可访问；来源列表和分页总数按主体过滤，详情/写入/测试/扫描同时检查。新增可选provider_subject_id：提供方由真实身份填写、不能指定他人；管理员可显式选择启用提供方或留空。已有来源归属不可编辑转移，旧NULL仅管理员管理；需求方不能读取来源连接信息。扫描、资源、能力继承来源归属，见 [权限接口](WORKSPACE_AUTH_API.md)。
+
 Foundation 自身仍使用固定 Spring DataSource 连接 foundation_db。外部数据库按 source_id 动态查询配置、解析凭据并建立短期 JDBC 连接，不为每个 Source 新增 Bean。所有接口使用 `/api/v1` 和 `{code,message,data}`，前端不能直接连接数据库。
+
+前端“数据源概览”使用已读取Source基本信息与既有`GET /scan-tasks`、`GET /resources`分页列表，不新增接口。关联筛选在前端按source_id完成，每类全局列表最多读取5,000条；页面展示匹配数量及最近5项，读取范围不完整时数量仅为下限。概览不调用连接测试、扫描或Provider业务查询，展示字段采用白名单，不回显密码、credential_ref或环境引用键。
 
 ## 新增与编辑
 
@@ -32,8 +36,11 @@ Foundation 自身仍使用固定 Spring DataSource 连接 foundation_db。外部
 | `POST /sources/{sourceId}/test` | 真实 JDBC 连接检查，读取产品、版本、耗时 |
 | `PATCH /sources/{sourceId}/status` | `{"status":"ENABLED"}` 或 `{"status":"DISABLED"}` |
 | `POST /sources/{sourceId}/scan` | 执行只读元数据扫描；接口细节见 SCAN_RESOURCE_API.md |
+| `DELETE /sources/{sourceId}` | 删除已停用且从未产生扫描记录的数据源，并清理其独立凭据 |
 
 数据源状态与连接测试结果分开。停用不删除历史，但禁止新的连接测试和扫描；启用不代表已经连接成功。
+
+删除采用保守规则：必须先停用；只要已有扫描历史就拒绝删除，以免破坏资源来源追溯。无扫描历史的数据源删除成功后，其加密凭据记录在同一事务中清理。
 
 ## 凭据与主密钥
 

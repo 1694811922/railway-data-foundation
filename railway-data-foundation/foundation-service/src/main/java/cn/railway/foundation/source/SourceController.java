@@ -44,4 +44,9 @@ public class SourceController {
     public ApiResponse<SourceView> status(@PathVariable String sourceId,@Valid @RequestBody StatusRequest request) {
         return ApiResponse.success(service.status(sourceId,request.status()));
     }
+    @DeleteMapping("/{sourceId}") @Operation(summary="删除未使用的数据源",description="仅已停用且没有扫描任务的数据源可删除；动态凭据同步清理")
+    public ApiResponse<Void> delete(@PathVariable String sourceId) {
+        service.delete(sourceId);
+        return ApiResponse.success(null);
+    }
 }

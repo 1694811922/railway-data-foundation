@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.*;
 
 @EnabledIfEnvironmentVariable(named="RUN_MYSQL_TESTS",matches="true")
 @SpringBootTest(webEnvironment=SpringBootTest.WebEnvironment.RANDOM_PORT)
-class DynamicSourceIntegrationTest {
+class DynamicSourceIntegrationTest extends AuthenticatedApiTest {
     @Autowired TestRestTemplate http;
     @Autowired JdbcTemplate db;
     @Autowired SourceMapper sources;
@@ -52,12 +52,22 @@ class DynamicSourceIntegrationTest {
     }
     @AfterEach void cleanup() {
         for (String id:ids) {
-            String ref=sources.selectById(id).credentialRef;
+            var existing=sources.selectById(id);
+            String ref=existing==null?null:existing.credentialRef;
             db.update("DELETE FROM metadata_scan_field WHERE task_id IN (SELECT task_id FROM metadata_scan_task WHERE source_id=?)",id);
             db.update("DELETE FROM metadata_scan_table WHERE task_id IN (SELECT task_id FROM metadata_scan_task WHERE source_id=?)",id);
             db.update("DELETE FROM metadata_scan_task WHERE source_id=?",id);
             sources.deleteById(id); if(ref!=null)credentials.deleteCredential(ref);
         }
+    }
+    @Test void deletionRequiresDisabledSourceAndRemovesOwnedCredential() {
+        String id=create(request("删除测试","TEST_SOURCE_DB_URL"));
+        String ref=sources.selectById(id).credentialRef;
+        assertThat(http.exchange("/api/v1/sources/"+id,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        http.exchange("/api/v1/sources/"+id+"/status",HttpMethod.PATCH,new HttpEntity<>(Map.of("status","DISABLED")),JsonNode.class);
+        assertThat(http.exchange("/api/v1/sources/"+id,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(sources.selectById(id)).isNull();
+        assertThat(db.queryForObject("SELECT COUNT(*) FROM source_credential WHERE credential_ref=?",Integer.class,ref)).isZero();
     }
     Map<String,Object> request(String name,String variable) {
         var body=new HashMap<String,Object>();var uri=uri(variable);

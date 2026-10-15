@@ -18,22 +18,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Opt-in: use ONLY dedicated disposable test databases. No clean/drop is performed. */
 @EnabledIfEnvironmentVariable(named = "RUN_MYSQL_TESTS", matches = "true")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-class MySqlBootstrapTest {
+class MySqlBootstrapTest extends AuthenticatedApiTest {
     @Autowired Flyway flyway;
     @Autowired ApplicationContext context;
     @Autowired TestRestTemplate http;
 
     @Test void realMySqlFoundationStartsWithFlywayAndMyBatis() throws Exception {
         assertThat(context.getBean(MybatisPlusAutoConfiguration.class)).isNotNull();
-        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("6");
+        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("17");
         assertThat(flyway.migrate().migrationsExecuted).isZero();
         try (var c = flyway.getConfiguration().getDataSource().getConnection()) {
             assertThat(c.getMetaData().getDatabaseProductName()).isEqualTo("MySQL");
             try (var r = c.createStatement().executeQuery("SHOW TABLES")) {
                 var tables = new HashSet<String>();
                 while (r.next()) tables.add(r.getString(1));
-                assertThat(tables).containsExactlyInAnyOrder("flyway_schema_history", "source_system",
-                        "metadata_scan_task", "metadata_scan_table", "metadata_scan_field", "data_resource", "resource_field", "capability", "source_credential");
+                assertThat(tables).containsExactlyInAnyOrder("workspace_registration", "workspace_registration_guard", "workspace_account", "flyway_schema_history", "source_system",
+                        "metadata_scan_task", "metadata_scan_table", "metadata_scan_field", "data_resource", "resource_field", "resource_revision", "capability", "source_credential", "sharing_subject", "access_policy", "sharing_relationship", "sharing_relationship_event", "caller_credential", "caller_credential_event", "sharing_runtime_report", "sharing_runtime_event", "kafka_subscription_grant", "kafka_subscription_event", "kafka_subscription_execution", "kafka_consumption_report");
             }
             try (var r = c.createStatement().executeQuery("SELECT COUNT(*), SUM(COLUMN_COMMENT = '') "
                     + "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "

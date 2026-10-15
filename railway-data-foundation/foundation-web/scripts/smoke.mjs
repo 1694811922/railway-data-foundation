@@ -6,12 +6,13 @@ import { join } from 'node:path'
 const browserPath = process.env.FOUNDATION_BROWSER || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
 // The UI smoke exercises the stable report fixture; live API behavior is covered by MySQL integration tests.
 if (process.env.SMOKE_EXPECT_REAL_SOURCE !== 'true') process.env.VITE_USE_MOCK = 'true'
-const server = await createServer({ server: { host: '127.0.0.1', port: 5174, strictPort: true } })
+const server = await createServer({ cacheDir: '../../.runtime/smoke-vite-cache', server: { host: '127.0.0.1', port: 5174, strictPort: true } })
 let browser
 try {
   await server.listen()
   browser = await chromium.launch({ executablePath: browserPath, headless: true })
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' })
+  const more=async(row,name)=>{await row.getByRole('button',{name:/更多操作/}).click();await page.getByRole('menuitem',{name,exact:true}).click()}
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
   await page.goto('http://127.0.0.1:5174/', { waitUntil: 'networkidle' })
@@ -21,6 +22,14 @@ try {
 
   await page.goto('http://127.0.0.1:5174/sources', { waitUntil: 'networkidle' })
   await page.getByRole('heading', { name: '数据源管理' }).waitFor()
+  if (process.env.SMOKE_EXPECT_REAL_SOURCE !== 'true') {
+    await page.getByTestId('source-table').getByRole('button',{name:'查看',exact:true}).first().click()
+    const overview=page.getByRole('dialog',{name:'数据源概览',exact:true})
+    await overview.getByTestId('demo-notice').waitFor()
+    await overview.getByText('广州港集装箱作业事件数据集',{exact:true}).waitFor()
+    await overview.getByRole('button',{name:'关闭',exact:true}).click()
+    await overview.waitFor({state:'hidden'})
+  }
   if (process.env.SMOKE_EXPECT_REAL_SOURCE === 'true') {
     await page.getByText('广州港业务数据库').first().waitFor()
     if (await page.getByText('后端不可用时展示演示数据').count()) throw new Error('Expected real Source API, got demo fallback')
@@ -40,13 +49,16 @@ try {
   if (await page.evaluate(()=>Object.values(localStorage).some(v=>v.includes('smoke-secret-not-for-storage'))))
     throw new Error('Source password leaked into browser storage')
   const sourceRow=page.getByRole('row').filter({hasText:'浏览器验收动态数据源'})
-  await sourceRow.getByRole('button',{name:'停用',exact:true}).click()
+  await more(sourceRow,'停用数据源')
   await sourceRow.getByText('已停用').waitFor()
   if(await sourceRow.getByRole('button',{name:'开始扫描'}).isEnabled())throw new Error('Disabled Source can start scan')
-  await sourceRow.getByRole('button',{name:'启用',exact:true}).click()
-  await sourceRow.getByRole('button',{name:'编辑',exact:true}).click()
+  await more(sourceRow,'启用数据源')
+  await more(sourceRow,'编辑配置')
   if(await page.getByRole('dialog').getByLabel('数据库密码').inputValue())throw new Error('Edit Source echoed a password')
   await page.getByRole('button',{name:'取消',exact:true}).click()
+  // Use the newly registered demo source; the seed source's table already has a Resource.
+  await sourceRow.getByRole('button',{name:'开始扫描',exact:true}).click()
+  await page.waitForURL('**/scans?task=*')
 
   await page.goto('http://127.0.0.1:5174/scans', { waitUntil: 'networkidle' })
   await page.getByRole('heading', { name: '元数据扫描' }).waitFor()
@@ -67,6 +79,10 @@ try {
   await page.goto('http://127.0.0.1:5174/capabilities', { waitUntil: 'networkidle' })
   await page.getByRole('heading', { name: '接口能力管理' }).waitFor()
   await page.getByText('集装箱CDC变化流').first().waitFor()
+  const draftCapability=page.getByRole('row').filter({hasText:'集装箱CDC变化流'})
+  await draftCapability.getByRole('button',{name:'删除',exact:true}).click()
+  await page.getByRole('button',{name:'确认删除',exact:true}).click()
+  await draftCapability.waitFor({state:'detached'})
   await page.getByRole('button', { name: '注册接口能力' }).click()
   const registration = page.getByRole('dialog')
   await registration.getByText('能力名称', { exact: true }).waitFor()
@@ -93,6 +109,7 @@ try {
   await page.goto('http://127.0.0.1:5174/scans', { waitUntil: 'networkidle' })
   await page.getByRole('button', { name: '创建资源' }).first().click()
   const resourceDialog = page.getByRole('dialog')
+  await page.getByTestId('registration-origin').waitFor()
   await resourceDialog.getByLabel('资源名称').fill('汇报验收集装箱事件资源')
   await resourceDialog.getByLabel('责任单位').fill('广州港数据管理部')
   await resourceDialog.getByLabel('业务描述').fill('汇报验收使用的集装箱作业事件元数据资源')
@@ -109,6 +126,30 @@ try {
   await capabilityDialog.getByRole('button', { name: '保存能力' }).click()
   await page.getByText('汇报验收查询接口').first().waitFor()
 
+  if (process.env.SMOKE_EXPECT_REAL_SOURCE !== 'true') {
+    await page.goto('http://127.0.0.1:5174/subjects', { waitUntil: 'networkidle' })
+    await page.getByRole('heading',{name:'共享主体管理',exact:true}).waitFor()
+    await page.getByTestId('subject-demo').waitFor()
+    await page.getByTestId('subject-table').getByText('广州港数据提供方（示例）',{exact:true}).waitFor()
+    await page.getByTestId('subject-table').getByText('铁路科研需求方（示例）',{exact:true}).waitFor()
+    const subjectRow=page.getByRole('row').filter({hasText:'铁路科研需求方（示例）'})
+    await subjectRow.getByRole('button',{name:'停用',exact:true}).click();await page.getByRole('button',{name:'确认',exact:true}).click()
+    await subjectRow.getByRole('button',{name:'删除',exact:true}).click();await page.getByRole('button',{name:'确认删除',exact:true}).click()
+    await subjectRow.waitFor({state:'detached'})
+    let accountCalls=0
+    page.on('request',request=>{if(new URL(request.url()).pathname.startsWith('/api/v1/accounts'))accountCalls++})
+    await page.goto('http://127.0.0.1:5174/accounts',{waitUntil:'networkidle'})
+    await page.getByText('演示模式不读取或操作真实账号',{exact:true}).waitFor()
+    if(await page.getByRole('button',{name:'创建账号',exact:true}).isEnabled() || accountCalls!==0)throw new Error('Demo mode can read or write real accounts')
+    let sharingCalls=0
+    page.on('request',request=>{if(/\/(caller-credentials|provider\/containers\/events)(\/|\?|$)/.test(new URL(request.url()).pathname))sharingCalls++})
+    await page.goto('http://127.0.0.1:5174/credentials',{waitUntil:'networkidle'})
+    await page.getByText('调用凭据仅支持真实后端，不生成模拟令牌。请关闭演示模式。',{exact:true}).waitFor()
+    if(await page.getByRole('button',{name:'签发调用凭据',exact:true}).isEnabled())throw new Error('Mock mode can issue a real caller credential')
+    await page.goto('http://127.0.0.1:5174/access-check',{waitUntil:'networkidle'})
+    await page.getByText('共享调用验证仅支持真实后端，演示模式不会发送查询或生成授权结果。',{exact:true}).waitFor()
+    if(await page.getByRole('button',{name:'发送共享查询',exact:true}).isEnabled()||sharingCalls!==0)throw new Error('Mock mode sent credential or business requests')
+  }
   await page.goto('http://127.0.0.1:5174/dashboard', { waitUntil: 'networkidle' })
   await mkdir('.runtime', { recursive: true })
   await page.screenshot({ path: join('.runtime', 'dashboard.png'), fullPage: true })

@@ -1,4 +1,8 @@
 . "$PSScriptRoot/local-common.ps1"
+$demandProcess = Get-RecordedProcess 'demand'
+if ($demandProcess) { $demandProcess.Kill(); $demandProcess.WaitForExit(10000) | Out-Null }
+$frontendProcess = Get-RecordedProcess 'frontend'
+if ($frontendProcess) { $frontendProcess.Kill(); $frontendProcess.WaitForExit(10000) | Out-Null }
 $appProcess = Get-RecordedProcess 'foundation'
 if ($appProcess) { $appProcess.Kill(); $appProcess.WaitForExit(10000) | Out-Null }
 $providerProcess = Get-RecordedProcess 'provider'

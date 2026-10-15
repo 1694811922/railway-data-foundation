@@ -1,4 +1,4 @@
-param([ValidateSet('rest-live-fixtures.json','resource-live-fixtures.json')][string]$ManifestName='rest-live-fixtures.json')
+param([ValidateSet('rest-live-fixtures.json','resource-live-fixtures.json','schema-comparison-live-fixtures.json','history-live-fixtures.json')][string]$ManifestName='rest-live-fixtures.json')
 . "$PSScriptRoot/local-common.ps1"
 . "$PSScriptRoot/load-env.ps1" -Path $LocalConfig
 if ($env:FOUNDATION_DB_URL -notmatch '^jdbc:mysql://127\.0\.0\.1:[0-9]+/foundation_db\?') { throw 'Cleanup is restricted to the local Foundation development schema.' }

@@ -1,0 +1,11 @@
+{
+  "name": "foundation-rest-demand-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node cli.mjs",
+    "test": "node --test client.test.mjs",
+    "test:live": "node live.mjs"
+  },
+  "engines": { "node": ">=20.19.0" }
+}

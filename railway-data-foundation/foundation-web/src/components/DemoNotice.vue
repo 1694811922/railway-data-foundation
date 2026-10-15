@@ -1,4 +1,4 @@
 <script setup>
-defineProps({ show: Boolean, text: { type: String, default: '此区域使用前端演示数据；相关后端接口尚未实现，操作只保存在当前浏览器。' } })
+defineProps({ show: Boolean })
 </script>
-<template><div v-if="show" class="note-banner"><strong>演示数据</strong><span>{{ text }}</span></div></template>
+<template><div v-if="show" data-testid="demo-notice"><el-tag type="warning">演示数据</el-tag></div></template>

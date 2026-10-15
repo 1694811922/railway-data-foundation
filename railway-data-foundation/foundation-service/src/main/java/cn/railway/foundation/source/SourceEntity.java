@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 @TableName("source_system")
 public class SourceEntity {
     @TableId public String sourceId;
+    public String providerSubjectId;
     public String sourceName;
     public String sourceType;
     @TableField(updateStrategy=FieldStrategy.ALWAYS)

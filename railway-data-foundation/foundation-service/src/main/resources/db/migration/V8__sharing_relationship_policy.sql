@@ -1,0 +1,63 @@
+CREATE TABLE access_policy (
+    policy_id VARCHAR(36) NOT NULL COMMENT '访问策略编号，POL_加32位随机标识',
+    resource_id VARCHAR(40) NOT NULL COMMENT '策略所属资源编号，字段与时间条件必须来自该资源',
+    allowed_fields JSON NOT NULL COMMENT '明确允许返回的字段名数组，非空且不重复，省略请求字段不得扩大范围',
+    time_field VARCHAR(64) NOT NULL COMMENT '人工确认的日期或时间类型字段，作为数据时间范围条件',
+    data_from DATETIME(3) NOT NULL COMMENT '允许的数据时间起点，包含，UTC',
+    data_until DATETIME(3) NOT NULL COMMENT '允许的数据时间终点，不包含，UTC',
+    version INT NOT NULL DEFAULT 1 COMMENT '策略版本，编辑草稿时递增，确认后不可编辑',
+    created_at DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    updated_at DATETIME(3) NOT NULL COMMENT '更新时间，UTC',
+    PRIMARY KEY (policy_id),
+    CONSTRAINT fk_policy_resource FOREIGN KEY (resource_id) REFERENCES data_resource(resource_id),
+    CONSTRAINT ck_policy_time CHECK (data_from < data_until),
+    CONSTRAINT ck_policy_fields CHECK (JSON_TYPE(allowed_fields) = 'ARRAY' AND JSON_LENGTH(allowed_fields) > 0),
+    CONSTRAINT ck_policy_version CHECK (version >= 1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='访问条件元数据；运行时执行由Provider承担，底座不保存业务明细';
+
+CREATE TABLE sharing_relationship (
+    relationship_id VARCHAR(36) NOT NULL COMMENT '共享关系编号，REL_加32位随机标识',
+    relationship_name VARCHAR(120) NOT NULL COMMENT '共享关系名称',
+    provider_subject_id VARCHAR(36) NOT NULL COMMENT '提供方业务主体编号，不作为运行时认证凭据',
+    demand_subject_id VARCHAR(36) NOT NULL COMMENT '需求方业务主体编号，不作为运行时认证凭据',
+    resource_id VARCHAR(40) NOT NULL COMMENT '已发布资源编号',
+    capability_id VARCHAR(40) NOT NULL COMMENT '该资源下的具体能力编号，按能力分别登记共享条件',
+    policy_id VARCHAR(36) NOT NULL COMMENT '本关系专属访问策略编号，不跨关系复用',
+    purpose VARCHAR(1000) NOT NULL COMMENT '数据使用目的，由管理员人工填写',
+    valid_from DATETIME(3) NOT NULL COMMENT '授权有效期起点，包含，UTC；与数据时间范围不同',
+    valid_until DATETIME(3) NOT NULL COMMENT '授权有效期终点，不包含，UTC',
+    status VARCHAR(16) NOT NULL DEFAULT 'DRAFT' COMMENT 'DRAFT草稿、PENDING待确认、CONFIRMED已确认、ACTIVE启用、SUSPENDED暂停、REVOKED撤回',
+    confirmed_at DATETIME(3) NULL COMMENT '管理员确认时间，UTC，草稿编辑或退回后清空',
+    version INT NOT NULL DEFAULT 1 COMMENT '关系乐观锁版本，编辑和每次状态变更递增',
+    created_at DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    updated_at DATETIME(3) NOT NULL COMMENT '更新时间，UTC',
+    PRIMARY KEY (relationship_id),
+    UNIQUE KEY uk_relationship_policy (policy_id),
+    KEY idx_relationship_updated (updated_at, relationship_id),
+    KEY idx_relationship_demand_capability (demand_subject_id, capability_id, status),
+    CONSTRAINT fk_relationship_provider FOREIGN KEY (provider_subject_id) REFERENCES sharing_subject(subject_id),
+    CONSTRAINT fk_relationship_demand FOREIGN KEY (demand_subject_id) REFERENCES sharing_subject(subject_id),
+    CONSTRAINT fk_relationship_resource FOREIGN KEY (resource_id) REFERENCES data_resource(resource_id),
+    CONSTRAINT fk_relationship_capability FOREIGN KEY (capability_id) REFERENCES capability(capability_id),
+    CONSTRAINT fk_relationship_policy FOREIGN KEY (policy_id) REFERENCES access_policy(policy_id),
+    CONSTRAINT ck_relationship_parties CHECK (provider_subject_id <> demand_subject_id),
+    CONSTRAINT ck_relationship_validity CHECK (valid_from < valid_until),
+    CONSTRAINT ck_relationship_status CHECK (status IN ('DRAFT','PENDING','CONFIRMED','ACTIVE','SUSPENDED','REVOKED')),
+    CONSTRAINT ck_relationship_confirmation CHECK (status NOT IN ('CONFIRMED','ACTIVE','SUSPENDED') OR confirmed_at IS NOT NULL),
+    CONSTRAINT ck_relationship_version CHECK (version >= 1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='主体、资源、能力及专属策略的共享关系；登记状态不替代执行侧认证与授权';
+
+CREATE TABLE sharing_relationship_event (
+    event_id BIGINT NOT NULL AUTO_INCREMENT COMMENT '状态历史记录编号',
+    relationship_id VARCHAR(36) NOT NULL COMMENT '共享关系编号，保留完整操作历史',
+    action VARCHAR(16) NOT NULL COMMENT 'CREATE、UPDATE、SUBMIT、CONFIRM、RETURN、ENABLE、SUSPEND、REVOKE',
+    from_status VARCHAR(16) NULL COMMENT '操作前状态，首次登记为空',
+    to_status VARCHAR(16) NOT NULL COMMENT '操作后状态',
+    operator_name VARCHAR(40) NOT NULL COMMENT '服务端记录的原型管理员标签，当前没有服务端登录认证',
+    reason VARCHAR(1000) NOT NULL COMMENT '操作原因，用户必填，不允许客户端覆盖操作者',
+    version INT NOT NULL COMMENT '该操作完成后的关系版本',
+    occurred_at DATETIME(3) NOT NULL COMMENT '操作时间，UTC',
+    PRIMARY KEY (event_id),
+    UNIQUE KEY uk_relationship_event_version (relationship_id, version),
+    CONSTRAINT fk_event_relationship FOREIGN KEY (relationship_id) REFERENCES sharing_relationship(relationship_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='共享关系编辑和状态变更历史，与关系变更同一事务写入';

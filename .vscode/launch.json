@@ -2,25 +2,44 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "启动本地后端（含 MySQL）",
+      "name": "启动完整系统（前端 + 三个服务 + MySQL + Kafka）",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"./railway-data-foundation/scripts/start-local.ps1\" -Kafka -Demand; if ($LASTEXITCODE -ne 0) { throw '后端或 Kafka 启动失败，请查看终端提示。' }; $env:Path = 'D:/Dev/node.js;' + $env:Path; & 'D:/Dev/node.js/npm.cmd' run dev --prefix ./railway-data-foundation/foundation-web -- --port 5173 --strictPort",
+      "cwd": "${workspaceFolder}",
+      "presentation": { "group": "启动", "order": 1 }
+    },
+    {
+      "name": "启动前端（5173）",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "$env:Path = 'D:/Dev/node.js;' + $env:Path; & 'D:/Dev/node.js/npm.cmd' run dev --prefix ./railway-data-foundation/foundation-web -- --port 5173 --strictPort",
+      "cwd": "${workspaceFolder}",
+      "presentation": { "group": "启动", "order": 2 }
+    },
+    {
+      "name": "启动后端（Foundation + Provider + MySQL + Kafka）",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"./railway-data-foundation/scripts/start-local.ps1\" -Kafka",
+      "cwd": "${workspaceFolder}",
+      "presentation": { "group": "启动", "order": 3 }
+    },
+    {
+      "name": "启动后端（Foundation + Provider + MySQL，不含 Kafka）",
       "type": "node-terminal",
       "request": "launch",
       "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"./railway-data-foundation/scripts/start-local.ps1\"",
-      "cwd": "${workspaceFolder}"
+      "cwd": "${workspaceFolder}",
+      "presentation": { "group": "启动", "order": 4 }
     },
     {
-      "name": "停止本地服务",
+      "name": "停止本地服务（后端 + MySQL + Kafka）",
       "type": "node-terminal",
       "request": "launch",
-      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"./railway-data-foundation/scripts/stop-local.ps1\"",
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "启动演示前端",
-      "type": "node-terminal",
-      "request": "launch",
-      "command": "$env:Path = 'D:\\Dev\\node.js;' + $env:Path; & 'D:\\Dev\\node.js\\npm.cmd' run dev --prefix ./railway-data-foundation/foundation-web",
-      "cwd": "${workspaceFolder}"
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"./railway-data-foundation/scripts/stop-local.ps1\"; if ($LASTEXITCODE -ne 0) { throw '停止本地服务失败，请查看终端提示。' }; powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"./railway-data-foundation/scripts/stop-local-kafka.ps1\"",
+      "cwd": "${workspaceFolder}",
+      "presentation": { "group": "停止", "order": 1 }
     }
   ]
 }

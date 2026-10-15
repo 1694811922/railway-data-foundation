@@ -24,6 +24,18 @@ function Initialize-LocalCredentialKey {
     } catch { throw 'FOUNDATION_CREDENTIAL_KEY must be a Base64-encoded 32-byte key. Preserve the existing key when restarting.' }
 }
 
+function Initialize-ProviderControlToken {
+    if (-not $env:PROVIDER_CONTROL_TOKEN) {
+        $tokenBytes=New-Object byte[] 32
+        $tokenRng=[Security.Cryptography.RandomNumberGenerator]::Create()
+        try { $tokenRng.GetBytes($tokenBytes) } finally { $tokenRng.Dispose() }
+        $controlValue=[Convert]::ToBase64String($tokenBytes).TrimEnd('=').Replace('+','-').Replace('/','_')
+        [IO.File]::AppendAllText($LocalConfig,"`nPROVIDER_CONTROL_TOKEN=$controlValue`n",$Utf8NoBom)
+        [Environment]::SetEnvironmentVariable('PROVIDER_CONTROL_TOKEN',$controlValue,'Process')
+    }
+    if ($env:PROVIDER_CONTROL_TOKEN -cnotmatch '^[A-Za-z0-9_-]{32,128}$') { throw 'PROVIDER_CONTROL_TOKEN must be a strong random service token; preserve it across restarts.' }
+}
+
 function Get-RecordedProcess([string]$Name) {
     $file = Join-Path $LocalRuntime "$Name.json"
     if (-not (Test-Path -LiteralPath $file)) { return $null }

@@ -1,0 +1,17 @@
+package cn.railway.demand;
+import org.junit.jupiter.api.Test;
+import org.apache.kafka.clients.consumer.*;
+import org.apache.kafka.common.TopicPartition;
+import org.springframework.mock.env.MockEnvironment;
+import java.util.*;
+import java.time.Instant;
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.*;
+class ReceivingReliabilityTest {
+    @Test void failedDatabaseNeverCommitsKafka(){var db=mock(DurableInbox.class);Consumer<byte[],byte[]> c=mock(Consumer.class);var now=Instant.now();when(db.save("task","topic-id",List.of(),now,now)).thenThrow(new IllegalStateException());assertThatThrownBy(()->ReceivingWorkers.deliverAndCommit(db,c,"task","topic-id","topic",List.of(),now,now)).isInstanceOf(IllegalStateException.class);verifyNoInteractions(c);}
+    @Test void commitsOnlyAfterDurableTransactionReturns(){var db=mock(DurableInbox.class);Consumer<byte[],byte[]> c=mock(Consumer.class);var now=Instant.now();when(db.save("task","topic-id",List.of(),now,now)).thenReturn(Map.of(0,12L));ReceivingWorkers.deliverAndCommit(db,c,"task","topic-id","topic",List.of(),now,now);var order=inOrder(db,c);order.verify(db).save("task","topic-id",List.of(),now,now);order.verify(c).commitSync(Map.of(new TopicPartition("topic",0),new OffsetAndMetadata(12L)));}
+    @Test void commitFailureDoesNotPretendDatabaseRolledBack(){var db=mock(DurableInbox.class);Consumer<byte[],byte[]> c=mock(Consumer.class);var now=Instant.now();when(db.save("task","topic-id",List.of(),now,now)).thenReturn(Map.of(0,12L));doThrow(new org.apache.kafka.common.errors.TimeoutException()).when(c).commitSync(anyMap());assertThatThrownBy(()->ReceivingWorkers.deliverAndCommit(db,c,"task","topic-id","topic",List.of(),now,now)).isInstanceOf(org.apache.kafka.common.errors.TimeoutException.class);verify(db,times(1)).save("task","topic-id",List.of(),now,now);}
+    @Test void encryptedSecretsAreBoundToTaskAndKey(){String key=Base64.getEncoder().encodeToString(new byte[32]);var vault=new SecretVault(new MockEnvironment().withProperty("DEMAND_CREDENTIAL_KEY",key));String value=vault.seal("task-a","private-kafka-password");assertThat(value).doesNotContain("private-kafka-password");assertThat(vault.open("task-a",value)).isEqualTo("private-kafka-password");assertThatThrownBy(()->vault.open("task-b",value)).isInstanceOf(ReceiverFailure.class);byte[] other=new byte[32];other[0]=1;var another=new SecretVault(new MockEnvironment().withProperty("DEMAND_CREDENTIAL_KEY",Base64.getEncoder().encodeToString(other)));assertThatThrownBy(()->another.open("task-a",value)).isInstanceOf(ReceiverFailure.class);}
+    @Test void nullEmptyBinaryAndTextHaveDistinctRepresentations(){assertThat(ReceivingService.representation(null).get("encoding")).isEqualTo("NULL");assertThat(ReceivingService.representation(new byte[0]).get("content")).isEqualTo("");assertThat(ReceivingService.representation(new byte[]{(byte)255}).get("encoding")).isEqualTo("BASE64");assertThat(ReceivingService.representation("中文".getBytes(java.nio.charset.StandardCharsets.UTF_8)).get("content")).isEqualTo("中文");}
+    @Test void changedHeadersAndNullValuesChangeDigest(){var a=new ConsumerRecord<byte[],byte[]>("topic",0,1,null,null);var b=new ConsumerRecord<byte[],byte[]>("topic",0,1,null,new byte[0]);assertThat(DurableInbox.digest(a,"[]")).isNotEqualTo(DurableInbox.digest(b,"[]"));assertThat(DurableInbox.digest(a,"[]")).isNotEqualTo(DurableInbox.digest(a,"[{\"key\":\"x\"}]"));}
+}

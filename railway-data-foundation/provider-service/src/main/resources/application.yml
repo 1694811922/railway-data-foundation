@@ -15,6 +15,7 @@ spring:
     hikari:
       connection-timeout: 3000
       maximum-pool-size: 3
+      connection-init-sql: "SET time_zone = '${PROVIDER_SOURCE_TIME_OFFSET:+08:00}'"
   flyway:
     enabled: false
   jackson:

@@ -6,6 +6,10 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 @SpringBootApplication
 public class FoundationApplication {
     public static void main(String[] args) {
-        SpringApplication.run(FoundationApplication.class, args);
+        var context=SpringApplication.run(FoundationApplication.class, args);
+        if(context.getEnvironment().getProperty("foundation.initialize-only",Boolean.class,false)){
+            // The administrator initializer has already run; no permanent extra process or plaintext file.
+            context.close();
+        }
     }
 }

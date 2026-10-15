@@ -115,7 +115,7 @@ try {
   fault='capabilities';await refresh()
   await page.getByTestId('capability-list-error').waitFor()
   assert.equal(await page.getByTestId('capability-table').count(),0)
-  assert.equal(await page.getByText('当前为演示数据',{exact:false}).count(),0)
+  assert.equal(await page.getByTestId('demo-notice').count(),0)
   await page.screenshot({path:'.runtime/capability-catalog-failure.png',fullPage:true})
   fault='';await refresh()
   assert.equal(await page.getByTestId('capability-list-error').count(),0)

@@ -1,10 +1,25 @@
+<script setup>
+import { capabilitySupport } from '../utils/capabilityForm'
+const supportRows=Object.entries(capabilitySupport).map(([type,description])=>({type,description,label:{REST_API:'REST接口',KAFKA_TOPIC:'Kafka消息主题',CDC_STREAM:'CDC变化流',READONLY_QUERY:'只读查询'}[type]}))
+</script>
 <template>
   <div class="stack">
-    <div class="page-heading"><div><div class="eyebrow">ABOUT / ARCHITECTURE</div><h1>系统说明</h1><p>铁路统一数据底座虚拟接入与共享治理原型系统</p></div></div>
-    <div class="panel"><div class="panel-title">架构原则</div><p style="line-height:1.9;color:#536d81">业务数据保留在源系统。统一数据底座管理 Source、Resource、Capability 等元数据，不保存业务明细，也不代理业务数据传输。REST、Kafka Topic 与 CDC Stream 是同一 Resource 的不同访问能力。</p></div>
+    <div class="page-heading"><div><h1>系统说明</h1></div></div>
+    <div class="panel"><div class="panel-title">数据与控制分离</div><p class="about-text">业务明细保留在源系统。底座登记数据源、扫描结构、管理资源与字段、纳管访问能力，不保存业务明细，也不代理业务数据传输。</p>
+      <div class="data-flow"><span>业务数据库</span><b>→</b><span>提供服务</span><b>→</b><span>调用方</span></div>
+
+    </div>
+    <div class="panel"><div class="panel-title">四种访问能力的当前支持范围</div><el-table :data="supportRows" data-testid="about-capability-support"><el-table-column prop="label" label="能力类型" width="170" /><el-table-column prop="description" label="当前功能与限制" min-width="300" /></el-table></div>
     <div class="grid-2">
-      <div class="panel"><div class="panel-title">当前真实后端能力</div><p>数据源管理、元数据扫描、资源发布、字段维护和接口能力登记已接入真实接口。</p><p>独立 Provider 可直读 Source，并将指定事件发送到 Kafka；Foundation 可验证 REST 和 Kafka Topic 元数据。</p></div>
-      <div class="panel"><div class="panel-title">当前演示边界</div><p>前端在后端不可用或显式演示模式下使用独立 mock，并标注“演示数据”。</p><p class="dim">Kafka 运行需另行配置 Broker；CDC 验证、能力启用及后续治理模块尚未开放。</p></div>
+      <div class="panel"><div class="panel-title">建议操作顺序</div><ol class="about-text"><li>登记数据源连接配置，测试连接。</li><li>扫描数据库结构，检查表与字段。</li><li>从扫描结果创建资源，人工补全业务信息并发布。</li><li>登记访问能力，按支持范围验证、显式启用或停用。</li></ol></div>
+      <div class="panel"><div class="panel-title">真实与演示数据</div><p class="about-text">默认使用真实接口。显式演示模式只修改当前浏览器的演示元数据，页面会显示演示标记；真实写入失败不转为演示成功。</p></div>
     </div>
   </div>
 </template>
+<style scoped>
+.about-text { line-height:1.9; color:#536d81; }
+.data-flow { display:flex; align-items:center; justify-content:center; gap:24px; margin:24px 0; }
+.data-flow span { background:#eef6f8; padding:16px 28px; color:#176b80; border:1px solid #d9e8ee; border-radius:8px; }
+.data-flow b { color:#8196a6; }
+@media(max-width:850px) { .data-flow { gap:10px; } .data-flow span { padding:12px; } }
+</style>

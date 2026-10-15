@@ -1,4 +1,4 @@
-param([switch]$Build, [switch]$Offline)
+param([switch]$Build, [switch]$Offline, [switch]$Kafka, [switch]$Demand)
 . "$PSScriptRoot/local-common.ps1"
 New-Item -ItemType Directory -Force -Path $LocalRuntime | Out-Null
 
@@ -18,6 +18,7 @@ LOCAL_MYSQL_PORT=13306
 LOCAL_MYSQL_ROOT_PASSWORD=$rootSecret
 FOUNDATION_BIND=127.0.0.1
 FOUNDATION_PORT=18080
+FOUNDATION_REGISTRATION_LOCAL_BOOTSTRAP_ENABLED=true
 FOUNDATION_DB_URL=jdbc:mysql://127.0.0.1:13306/foundation_db?allowPublicKeyRetrieval=true&sslMode=DISABLED&serverTimezone=Asia/Shanghai
 FOUNDATION_DB_USER=foundation_app
 FOUNDATION_DB_PASSWORD=$foundationSecret
@@ -31,7 +32,24 @@ SOURCE_DB_SSL_MODE=DISABLED
 "@
 }
 . "$PSScriptRoot/load-env.ps1" -Path $LocalConfig
+if ($Kafka) {
+    # An explicit opt-in local overlay; existing remote Kafka and DB configuration is not overwritten.
+    & "$PSScriptRoot/start-local-kafka.ps1" -Offline:$Offline
+    . "$PSScriptRoot/load-env.ps1" -Path "$LocalRuntime/kafka/backend.env"
+    $existingFoundation=Get-RecordedProcess 'foundation'
+    $existingProvider=Get-RecordedProcess 'provider'
+    $modeFile=Join-Path $LocalRuntime 'backend-kafka-mode.json'
+    $sameMode=$false
+    if ((Test-Path -LiteralPath $modeFile) -and $existingFoundation -and $existingProvider) {
+        $mode=Get-Content -LiteralPath $modeFile -Raw | ConvertFrom-Json
+        $sameMode=$mode.foundation_pid -eq $existingFoundation.Id -and $mode.provider_pid -eq $existingProvider.Id -and $mode.overlay_hash -eq (Get-FileHash -LiteralPath "$LocalRuntime/kafka/backend.env" -Algorithm SHA512).Hash
+    }
+    if (($existingFoundation -or $existingProvider) -and -not $sameMode) {
+        throw 'Local Kafka is ready. Stop the existing Foundation/Provider before opting into its configuration; they have not been silently reconfigured.'
+    }
+}
 Initialize-LocalCredentialKey
+Initialize-ProviderControlToken
 # Upgrade existing local configuration without replacing credentials or database files.
 if (-not $env:SOURCE_DB_HOST) {
     $sourceUri = [Uri]($env:SOURCE_MIGRATION_URL.Substring(5))
@@ -148,16 +166,22 @@ if (-not $appProcess) {
     Save-LocalProcess 'foundation' $appProcess
 }
 $baseUrl = "http://$($env:FOUNDATION_BIND):$($env:FOUNDATION_PORT)"
+$foundationReady = $false
 for ($attempt=0; $attempt -lt 60; $attempt++) {
     if ($appProcess.HasExited) { throw 'Foundation exited. See .runtime/local/foundation.out.log.' }
     try {
         $health = Invoke-RestMethod "$baseUrl/api/v1/health" -TimeoutSec 2
         if ($health.code -eq 0 -and $health.data.service -eq 'foundation-service') {
+            if ($Kafka) { Write-LocalFile (Join-Path $LocalRuntime 'backend-kafka-mode.json') (@{foundation_pid=$appProcess.Id;provider_pid=$providerProcess.Id;overlay_hash=(Get-FileHash -LiteralPath "$LocalRuntime/kafka/backend.env" -Algorithm SHA512).Hash} | ConvertTo-Json) }
             Write-Host "Backend ready: $baseUrl/swagger-ui.html; Provider health: $providerUrl/api/v1/provider/health"
-            Write-Host 'REST queries require an enabled capability and the X-Capability-Id request header.'
-            exit 0
+            Write-Host 'REST queries require an active shared relationship, caller Bearer credential and X-Capability-Id/X-Relationship-Id headers.'
+            $foundationReady = $true
+            break
         }
     } catch { }
     Start-Sleep -Milliseconds 500
 }
-throw 'Foundation startup timed out. Inspect .runtime/local logs.'
+if (-not $foundationReady) { throw 'Foundation startup timed out. Inspect .runtime/local logs.' }
+
+if ($Demand) { & "$PSScriptRoot/start-demand-local.ps1" -Build:$Build -Offline:$Offline }
+exit 0

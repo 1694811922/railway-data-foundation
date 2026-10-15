@@ -12,7 +12,8 @@ import org.springframework.web.bind.annotation.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@WebMvcTest(HealthController.class)
+@WebMvcTest(controllers=HealthController.class,excludeFilters=@org.springframework.context.annotation.ComponentScan.Filter(type=org.springframework.context.annotation.FilterType.ASSIGNABLE_TYPE,classes={cn.railway.foundation.security.WorkspaceGate.class,cn.railway.foundation.security.SecurityConfiguration.class}))
+@org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc(addFilters=false)
 @Import({GlobalExceptionHandler.class, ApiContractTest.FailureController.class})
 class ApiContractTest {
     @Autowired MockMvc mvc;

@@ -19,6 +19,9 @@ import org.springframework.web.HttpMediaTypeNotSupportedException;
 public class GlobalExceptionHandler {
     private static final Logger LOG = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    public ResponseEntity<ApiResponse<Void>> forbidden(Exception ex){return ResponseEntity.status(403).body(new ApiResponse<>(10102,"无权访问该操作或其他主体的数据",null));}
+
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<ApiResponse<Void>> business(BusinessException ex) {
         return ResponseEntity.status(ex.errorCode().status())

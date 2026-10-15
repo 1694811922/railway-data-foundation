@@ -117,7 +117,7 @@ try {
     await page.getByTestId('catalog-error').waitFor()
     assert.equal(await page.getByTestId('catalog-table').count(),0)
     assert.equal(await page.getByText('广州港集装箱作业事件数据集',{exact:true}).count(),0)
-    assert.equal(await page.getByText('当前目录使用前端演示数据',{exact:false}).count(),0)
+    assert.equal(await page.getByTestId('demo-notice').count(),0)
   }
   await page.screenshot({path:'.runtime/resource-catalog-failure.png',fullPage:true})
   failure='';await refresh()

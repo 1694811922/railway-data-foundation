@@ -70,6 +70,18 @@ public class EncryptedCredentialService implements CredentialService {
         }
     }
 
+    /** Internal-only envelope, separate AAD namespace from database source credentials. */
+    public String sealSubscription(String grantId,String username,String password) {
+        return encrypt(subscriptionContext(grantId,username),password);
+    }
+    public String openSubscription(String grantId,String username,String stored) {
+        return decrypt(subscriptionContext(grantId,username),stored);
+    }
+    private static String subscriptionContext(String grantId,String username) {
+        if(!grantId.matches("KSG_[a-f0-9]{32}")||!username.matches("rdfk_[a-f0-9]{32}"))throw unavailable();
+        return "kafka-subscription:"+grantId+":"+username;
+    }
+
     String encrypt(String ref, String password) {
         var key=key();
         byte[] nonce=new byte[12]; random.nextBytes(nonce);

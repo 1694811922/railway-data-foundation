@@ -31,4 +31,9 @@ public class ScanController {
     public ApiResponse<List<ScanService.Field>> fields(@PathVariable String taskId, @PathVariable String tableName) {
         return ApiResponse.success(service.fields(taskId, tableName));
     }
+    @DeleteMapping("/scan-tasks/{taskId}")
+    public ApiResponse<Void> delete(@PathVariable String taskId) {
+        service.delete(taskId);
+        return ApiResponse.success(null);
+    }
 }

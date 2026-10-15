@@ -9,6 +9,10 @@
 !railway-data-foundation/foundation-web/.env.development
 *.pem
 *.key
+*.jks
+*.p12
+*.pfx
+*.keystore
 client.cnf
 
 # Dependencies, build output, and local tooling for report preparation.

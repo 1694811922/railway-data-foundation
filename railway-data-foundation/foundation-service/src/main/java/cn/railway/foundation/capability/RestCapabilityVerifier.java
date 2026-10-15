@@ -23,7 +23,7 @@ public class RestCapabilityVerifier {
     public boolean probe(CapabilityService.Capability capability) {
         if (!"REST_API".equals(capability.type()) || !"GET".equals(capability.httpMethod())
                 || !"NONE".equals(capability.authType()) || !"/containers/events".equals(capability.endpoint()))
-            throw new BusinessException(ErrorCode.BUSINESS_ERROR,"当前只支持无认证的集装箱事件 REST GET 能力验证");
+            throw new BusinessException(ErrorCode.BUSINESS_ERROR,"当前仅支持集装箱事件REST GET原始适配器的能力验证");
         var source=binding.requireSupported(capability.resourceId());
         URI target=providerBase(capability).resolve(capability.endpoint());
         HttpRequest request=HttpRequest.newBuilder(target).timeout(Duration.ofSeconds(4))
@@ -33,6 +33,7 @@ public class RestCapabilityVerifier {
             return response.statusCode()==204
                     && response.headers().firstValue("X-Railway-Provider").orElse("").equals("container-event-v1")
                     && response.headers().firstValue("X-Railway-Runtime").orElse("").equals("rest-capability-v1")
+                    && response.headers().firstValue("X-Railway-Access").orElse("").equals("sharing-access-v1")
                     && source.host().equalsIgnoreCase(response.headers().firstValue("X-Railway-Source-Host").orElse(""))
                     && Integer.toString(source.port()).equals(response.headers().firstValue("X-Railway-Source-Port").orElse(""))
                     && source.databaseName().equals(response.headers().firstValue("X-Railway-Source-Database").orElse(""))

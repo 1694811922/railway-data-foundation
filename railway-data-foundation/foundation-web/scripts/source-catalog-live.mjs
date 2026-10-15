@@ -22,6 +22,7 @@ try{
   async function refresh(){await page.getByRole('button',{name:'刷新列表',exact:true}).click();await ready()}
   async function waitGate(getGate){const deadline=Date.now()+10000;while(!getGate()){assert.ok(Date.now()<deadline,'Expected request did not arrive');await new Promise(resolve=>setTimeout(resolve,20))}}
   async function screenshot(name){if(await page.locator('.el-message').count())await page.locator('.el-message').last().waitFor({state:'hidden'});await page.screenshot({path:'.runtime/'+name+'.png',fullPage:true,animations:'disabled'})}
+  async function more(row,name){await row.getByRole('button',{name:/更多操作/}).click();await page.getByRole('menuitem',{name,exact:true}).click()}
   const table=()=>page.getByTestId('source-table'),newButton=()=>page.getByRole('button',{name:'＋ 新增数据源',exact:true})
   await page.goto('http://127.0.0.1:5182/',{waitUntil:'networkidle'});await page.getByRole('button',{name:'进入平台',exact:true}).click()
   await page.goto('http://127.0.0.1:5182/sources',{waitUntil:'networkidle'});await ready()
@@ -91,7 +92,7 @@ try{
   const calls=testCalls
   await row.getByRole('button',{name:'测试连接',exact:true}).evaluate(button=>{button.dispatchEvent(new MouseEvent('click',{bubbles:true}));button.dispatchEvent(new MouseEvent('click',{bubbles:true}))})
   assert.equal(testCalls,calls);releaseTest();releaseTest=null;await ready()
-  await row.getByRole('button',{name:'编辑',exact:true}).click()
+  await more(row,'编辑配置')
   const dialog=page.getByRole('dialog')
   assert.equal(await dialog.getByLabel('数据库密码',{exact:true}).inputValue(),'')
   const storage=await page.evaluate(()=>JSON.stringify(Object.entries(localStorage)))
@@ -114,14 +115,14 @@ try{
   await dialog.getByRole('button',{name:'取消',exact:true}).click();await newButton().click()
   assert.equal(await dialog.getByLabel('数据库密码',{exact:true}).inputValue(),'')
   await dialog.getByRole('button',{name:'取消',exact:true}).click()
-  await row.getByRole('button',{name:'停用',exact:true}).click();await ready()
+  await more(row,'停用数据源');await ready()
   assert.equal(statusCalls,1);assert.equal(rows[450].status,'ENABLED')
   await row.getByRole('button',{name:'开始扫描',exact:true}).click();await ready()
   assert.equal(scanCalls,1);assert.equal(new URL(page.url()).pathname,'/sources')
   assert.equal(await page.evaluate(()=>JSON.stringify(Object.entries(localStorage))),storage)
   listFault='second';await refresh();await page.getByTestId('source-list-error').waitFor()
   assert.equal(await table().count(),0);assert.equal(await newButton().isDisabled(),true)
-  assert.equal(await page.getByText('当前为演示数据',{exact:false}).count(),0)
+  assert.equal(await page.getByTestId('demo-notice').count(),0)
   await screenshot('source-catalog-list-failure')
   listFault='first';await refresh();await page.getByTestId('source-list-error').waitFor()
   listFault='';await refresh();assert.match(await page.getByTestId('source-count').textContent(),/已读取 451 项/)

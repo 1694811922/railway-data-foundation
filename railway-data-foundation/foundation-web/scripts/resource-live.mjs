@@ -1,6 +1,7 @@
 import { createServer } from 'vite'
 import { chromium } from 'playwright-core'
 import { mkdir, writeFile } from 'node:fs/promises'
+import { resourcePayload } from '../src/utils/resourceForm.js'
 
 // Local opt-in validation. All temporary Source/Resource/Capability names use the guarded UI_REST_ prefix.
 for (const name of ['PROVIDER_SOURCE_DB_URL','PROVIDER_SOURCE_DB_USER','PROVIDER_SOURCE_DB_PASSWORD'])
@@ -25,7 +26,8 @@ async function screenshot(page, name) {
 try {
   await server.listen()
   browser = await chromium.launch({ executablePath:process.env.FOUNDATION_BROWSER || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless:true })
-  page = await browser.newPage({viewport:{width:1660,height:1050},locale:'zh-CN'})
+  const context=await browser.newContext({viewport:{width:1660,height:1050},locale:'zh-CN'})
+  page = await context.newPage()
   const errors = []
   page.on('pageerror', error=>errors.push(error.message))
   const source = await data(await page.request.post(api+'/sources',{data:{source_name:'UI_REST_资源验收来源_'+run,source_type:'MYSQL',
@@ -71,6 +73,9 @@ try {
   await dialog.getByLabel('资源名称').fill(resourceName)
   await dialog.getByLabel('责任单位').fill('资源验收组')
   await dialog.getByLabel('业务描述').fill('从真实扫描登记的临时资源，仅用于资源页面验收')
+  // A scan finishing after the user reviewed the form must not replace the chosen snapshot.
+  const newerScan=await data(await page.request.post(api+'/sources/'+source.source_id+'/scan'))
+  assert(newerScan.status==='SUCCESS'&&newerScan.task_id!==secondScan.task_id,'Additional scan failed')
   const storageSnapshot = () => page.evaluate(()=>JSON.stringify(Object.entries(localStorage).sort()))
   const initialStorage = await storageSnapshot()
   const createUrl = '**/api/v1/resources'
@@ -84,7 +89,15 @@ try {
   const creation = page.waitForResponse(r=>r.url().endsWith('/api/v1/resources') && r.request().method()==='POST')
   await dialog.getByRole('button',{name:'保存资源'}).click()
   const resource = await data(await creation), id = resource.resource_id
+  assert(resource.scan_task_id===secondScan.task_id,'Backend rebound the reviewed snapshot to the latest scan')
   fixtures[0].resource_id = id
+  await page.getByRole('heading',{name:resourceName}).waitFor()
+  const provenance=page.getByTestId('resource-scan-origin')
+  assert((await provenance.textContent()).trim()===secondScan.task_id,'Resource detail does not show its immutable scan')
+  await provenance.click();await page.waitForURL('**/scans?task='+secondScan.task_id)
+  await page.locator('.selected-summary').waitFor()
+  assert((await page.locator('.selected-summary').textContent()).includes(secondScan.task_id),'Scan origin link opened another task')
+  await page.goto('http://127.0.0.1:5177/resources/'+id,{waitUntil:'networkidle'})
   await page.getByRole('heading',{name:resourceName}).waitFor()
   const current = async () => data(await page.request.get(api+'/resources/'+id))
   const fieldRows = async () => data(await page.request.get(api+'/resources/'+id+'/fields'))
@@ -100,6 +113,32 @@ try {
   await page.getByRole('button',{name:'刷新详情',exact:true}).click()
   await page.getByText('event_time',{exact:true}).waitFor()
   const eventRow = page.getByRole('row').filter({hasText:'event_time'})
+  // Two real pages read the same version: the later stale save cannot overwrite the winner.
+  const otherPage=await page.context().newPage()
+  await otherPage.goto('http://127.0.0.1:5177/',{waitUntil:'networkidle'})
+  await otherPage.getByRole('button',{name:'进入平台',exact:true}).click()
+  await otherPage.goto('http://127.0.0.1:5177/resources/'+id,{waitUntil:'networkidle'})
+  await otherPage.getByRole('tab',{name:/字段元数据/}).click()
+  await otherPage.getByText('event_time',{exact:true}).waitFor()
+  await otherPage.getByRole('row').filter({hasText:'event_time'}).getByRole('button',{name:'编辑',exact:true}).click()
+  await eventRow.getByRole('button',{name:'编辑',exact:true}).click()
+  await page.getByRole('dialog').getByLabel('业务名称').fill('旧页面待保存名称')
+  await otherPage.getByRole('dialog').getByLabel('业务名称').fill('另一页面先保存名称')
+  const concurrentVersion=(await current()).version
+  await otherPage.getByRole('dialog').getByRole('button',{name:'保存字段'}).click()
+  await otherPage.getByText('另一页面先保存名称',{exact:true}).waitFor()
+  const conflictReply=page.waitForResponse(r=>r.request().method()==='PUT'&&r.url().endsWith('/fields/event_time'))
+  await page.getByRole('dialog').getByRole('button',{name:'保存字段'}).click()
+  assert((await conflictReply).status()===409,'Stale field save was not rejected')
+  await page.getByTestId('resource-field-conflict').waitFor()
+  assert(await page.getByRole('dialog').getByLabel('业务名称').inputValue()==='旧页面待保存名称','Field conflict lost input')
+  assert(await page.getByRole('dialog').getByRole('button',{name:'保存字段'}).isDisabled(),'Conflicting form allows blind retry')
+  assert((await current()).version===concurrentVersion+1,'Rejected save changed version')
+  assert((await fieldRows()).find(f=>f.field_name==='event_time').business_name==='另一页面先保存名称','Stale save overwrote another page')
+  await screenshot(page,'resource-live-field-conflict')
+  await page.getByRole('button',{name:'取消并刷新详情',exact:true}).click()
+  await page.getByText('另一页面先保存名称',{exact:true}).waitFor()
+  await otherPage.close()
   const versionBeforeField = (await current()).version
   await eventRow.getByRole('button',{name:'编辑',exact:true}).click()
   const fieldDialog = page.getByRole('dialog')
@@ -123,6 +162,10 @@ try {
   assert((await current()).version===versionBeforeField+1,'Lost response caused an automatic duplicate field write')
   assert(await storageSnapshot()===initialStorage,'Lost real response wrote mock data')
   await page.unroute(fieldWriteUrl)
+  // A manual retry after a lost success response also carries the old version and must not write twice.
+  await fieldDialog.getByRole('button',{name:'保存字段'}).click()
+  await page.getByTestId('resource-field-conflict').waitFor()
+  assert((await current()).version===versionBeforeField+1,'Manual retry after lost response wrote twice')
   await fieldDialog.getByRole('button',{name:'取消',exact:true}).click()
   await page.getByRole('button',{name:'刷新详情',exact:true}).click()
   await page.getByText('真实作业发生时间',{exact:true}).waitFor()
@@ -134,14 +177,26 @@ try {
   await page.getByText('作业事件时间',{exact:true}).waitFor()
   await page.getByRole('button',{name:'返回资源目录'}).click()
   const resourceRow = page.getByRole('row').filter({hasText:resourceName})
-  await resourceRow.getByRole('button',{name:'编辑',exact:true}).click()
+  await resourceRow.getByRole('button',{name:/更多操作/}).click();await page.getByRole('menuitem',{name:'编辑资源',exact:true}).click()
   assert(await dialog.getByLabel('物理表').getAttribute('readonly')!==null,'Resource edit can change physical table')
+  await dialog.getByLabel('责任单位').fill('资源验收组（修订）')
+  const otherEditor=await current()
+  await data(await page.request.put(api+'/resources/'+id,{data:{...resourcePayload(otherEditor,otherEditor.version),owner_department:'其他页面修订单位'}}))
+  await dialog.getByRole('button',{name:'保存资源'}).click()
+  await page.getByTestId('resource-edit-conflict').waitFor()
+  assert(await dialog.getByLabel('责任单位').inputValue()==='资源验收组（修订）','Resource conflict lost input')
+  assert(await dialog.getByRole('button',{name:'保存资源'}).isDisabled(),'Resource conflict permits blind retry')
+  assert((await current()).owner_department==='其他页面修订单位','Stale resource form overwrote newer data')
+  await screenshot(page,'resource-live-edit-conflict')
+  await dialog.getByRole('button',{name:'取消并刷新目录'}).click()
+  await resourceRow.getByRole('button',{name:/更多操作/}).click();await page.getByRole('menuitem',{name:'编辑资源',exact:true}).click()
+  assert(await dialog.getByLabel('责任单位').inputValue()==='其他页面修订单位','Refresh did not read latest metadata')
   await dialog.getByLabel('责任单位').fill('资源验收组（修订）')
   const updateUrl = '**/api/v1/resources/'+id
   await page.route(updateUrl,route=>route.request().method()==='PUT'?route.abort('failed'):route.continue())
   await dialog.getByRole('button',{name:'保存资源'}).click()
   await page.getByText(/保存资源请求失败/).last().waitFor()
-  assert((await current()).owner_department==='资源验收组','Failed resource edit persisted changes')
+  assert((await current()).owner_department==='其他页面修订单位','Failed resource edit persisted changes')
   await page.unroute(updateUrl)
   await dialog.getByRole('button',{name:'保存资源'}).click()
   await page.getByRole('heading',{name:resourceName}).waitFor()
@@ -171,7 +226,7 @@ try {
   fixtures[0].capability_id = (await data(await capCreation)).capability_id
   assert(errors.length===0,'Browser errors: '+errors.join(' | '))
   assert(await storageSnapshot()===initialStorage,'Real workflow changed demo storage')
-  console.log('Real resource UI passed: scanned origin locked, stale field result ignored, real failures never mocked, lost response not retried, resource/field edits persisted, publish then register capability.')
+  console.log('Real resource UI passed: selected scan locked; two real pages reject stale field saves; resource conflicts preserve input and refresh; lost-response retry rejected; real failures never mocked; field/resource edits persisted, publish then register capability.')
 } catch (error) {
   await mkdir('.runtime',{recursive:true})
   if (page) await page.screenshot({path:'.runtime/resource-live-failure.png',fullPage:true,animations:'disabled'})

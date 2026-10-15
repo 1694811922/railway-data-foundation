@@ -2,7 +2,15 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "本地：启动后端",
+      "label": "启动：需求方真实数据接收服务",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/railway-data-foundation/scripts/start-demand-local.ps1", "-Offline"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": []
+    },
+    {
+      "label": "演示：Kafka 模拟数据完整流程",
       "type": "process",
       "command": "powershell.exe",
       "args": [
@@ -10,7 +18,12 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${workspaceFolder}/railway-data-foundation/scripts/start-local.ps1"
+        "${workspaceFolder}/railway-data-foundation/scripts/run-kafka-simulation.ps1",
+        "-Messages",
+        "20",
+        "-NodeExecutable",
+        "D:/Dev/node.js/node.exe",
+        "-Offline"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -18,7 +31,7 @@
       "problemMatcher": []
     },
     {
-      "label": "本地：停止服务",
+      "label": "实验：三类传输场景",
       "type": "process",
       "command": "powershell.exe",
       "args": [
@@ -26,7 +39,39 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${workspaceFolder}/railway-data-foundation/scripts/stop-local.ps1"
+        "${workspaceFolder}/railway-data-foundation/scripts/run-interface-lab.ps1"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "实验：验证 Kafka 重启",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/railway-data-foundation/scripts/test-local-kafka.ps1"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "实验：验证 Kafka 初始化",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/railway-data-foundation/scripts/test-local-kafka-bootstrap.ps1"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -41,17 +86,12 @@
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
-        "-File",
-        "${workspaceFolder}/railway-data-foundation/scripts/start-local.ps1",
-        "-Build"
+        "-Command",
+        "$ErrorActionPreference = \"Stop\"; & \"./railway-data-foundation/scripts/stop-local.ps1\"; & \"./railway-data-foundation/scripts/start-local.ps1\" -Build"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
       },
-      "dependsOn": [
-        "本地：停止服务"
-      ],
-      "dependsOrder": "sequence",
       "problemMatcher": [],
       "group": {
         "kind": "build",

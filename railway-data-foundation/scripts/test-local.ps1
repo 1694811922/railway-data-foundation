@@ -1,7 +1,8 @@
-param([switch]$Offline)
+param([switch]$Offline,[string]$TestName)
 . "$PSScriptRoot/local-common.ps1"
 . "$PSScriptRoot/load-env.ps1" -Path $LocalConfig
 Initialize-LocalCredentialKey
+Initialize-ProviderControlToken
 if (-not (Get-RecordedProcess 'mysql')) { throw 'Start local MySQL with start-local.ps1 first.' }
 $env:JAVA_HOME=$env:LOCAL_JAVA_HOME
 $env:DEBUG='false'
@@ -29,5 +30,6 @@ $settings=Join-Path $PSScriptRoot 'maven-settings.xml'
 $cache=Join-Path (Split-Path -Parent $LocalProject) '.runtime/m2'
 $mavenArgs=@('-gs',$settings,'-s',$settings,"-Dmaven.repo.local=$cache",'-f',"$LocalProject/pom.xml",'test','-B','-ntp')
 if ($Offline) { $mavenArgs += '-o' }
+if ($TestName) { $mavenArgs += @("-Dtest=$TestName",'-Dsurefire.failIfNoSpecifiedTests=false') }
 & mvn.cmd @mavenArgs
 if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }

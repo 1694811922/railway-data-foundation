@@ -25,6 +25,7 @@ public record SourceRequest(
         @Pattern(regexp="DISABLED|PREFERRED|REQUIRED|VERIFY_CA|VERIFY_IDENTITY") String sslMode,
         @Size(max=1024) @JsonProperty(access=JsonProperty.Access.WRITE_ONLY)
         @Schema(accessMode=Schema.AccessMode.WRITE_ONLY,description="新增必填；编辑留空保留原凭据，永不返回") String password,
-        @Pattern(regexp="ENABLED|DISABLED") String status) {
+        @Pattern(regexp="ENABLED|DISABLED") String status, @Pattern(regexp="SUB_[a-f0-9]{32}") String providerSubjectId) {
+    public SourceRequest(String name,String type,String prefix,String description,String host,Integer port,String database,String username,String ssl,String password,String status){this(name,type,prefix,description,host,port,database,username,ssl,password,status,null);}
     @Override public String toString() { return "SourceRequest[redacted]"; }
 }

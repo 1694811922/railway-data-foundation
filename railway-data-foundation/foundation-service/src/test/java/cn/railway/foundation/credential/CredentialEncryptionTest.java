@@ -32,4 +32,14 @@ class CredentialEncryptionTest {
                 .isInstanceOf(BusinessException.class).hasMessageNotContaining("secret");
         assertThat(new SourceCredential("reader","secret").toString()).doesNotContain("reader","secret");
     }
+    @Test void subscriptionEnvelopeCannotBeCopiedToAnotherGrantIdentityOrSource() {
+        var service=service(new MockEnvironment().withProperty("FOUNDATION_CREDENTIAL_KEY",KEY));
+        String grant="KSG_"+"a".repeat(32),user="rdfk_"+"b".repeat(32);
+        String value=service.sealSubscription(grant,user,"fixture-subscription-secret");
+        assertThat(value).doesNotContain("fixture-subscription-secret");
+        assertThat(service.openSubscription(grant,user,value)).isEqualTo("fixture-subscription-secret");
+        assertThatThrownBy(()->service.openSubscription("KSG_"+"c".repeat(32),user,value)).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(()->service.openSubscription(grant,"rdfk_"+"d".repeat(32),value)).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(()->service.decrypt(grant,value)).isInstanceOf(BusinessException.class);
+    }
 }

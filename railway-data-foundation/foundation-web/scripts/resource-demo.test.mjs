@@ -11,11 +11,22 @@ test('demo field edits are scoped to resource, not global scan fields', () => {
   const second = { ...demoSeed.resources[0], resource_id:'RES_DEMO_TEST', resource_name:'另一演示资源' }
   demoStore.put('resources', second, 'resource_id')
   const original = demoStore.resourceFields('RES_000001').find(f=>f.field_name==='container_no')
-  demoStore.saveResourceField('RES_DEMO_TEST','container_no',{ business_name:'另一资源字段名称' })
+  demoStore.saveResourceField('RES_DEMO_TEST','container_no',{ business_name:'另一资源字段名称',resource_version:1 })
   assert.equal(demoStore.resourceFields('RES_DEMO_TEST').find(f=>f.field_name==='container_no').business_name,'另一资源字段名称')
   assert.equal(demoStore.resourceFields('RES_000001').find(f=>f.field_name==='container_no').business_name,original.business_name)
   assert.equal(demoStore.list('fields').find(f=>f.field_name==='container_no').business_name,original.business_name)
   assert.equal(demoStore.list('resources').find(r=>r.resource_id===second.resource_id).version,2)
+})
+test('demo field versions match the resource and stale writes never change storage',()=>{
+  storage.clear()
+  assert.ok(demoStore.resourceFields('RES_000001').every(row=>row.resource_version===1))
+  const result=demoStore.saveResourceField('RES_000001','event_time',{business_name:'新名称',resource_version:1})
+  assert.equal(result.resource_version,2)
+  assert.ok(demoStore.resourceFields('RES_000001').every(row=>row.resource_version===2))
+  const before=JSON.stringify([...storage])
+  for(const version of [undefined,1,0])
+    assert.throws(()=>demoStore.saveResourceField('RES_000001','container_no',{business_name:'覆盖',resource_version:version}),/资源已被修改/)
+  assert.equal(JSON.stringify([...storage]),before)
 })
 test('only owned demo IDs select demo resource mode', () => {
   assert.equal(isDemoResource('RES_000001'),true)

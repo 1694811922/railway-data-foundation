@@ -27,13 +27,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 @EnabledIfEnvironmentVariable(named="RUN_MYSQL_TESTS", matches="true")
 @SpringBootTest(webEnvironment=SpringBootTest.WebEnvironment.RANDOM_PORT)
 @EmbeddedKafka(partitions=1,topics="port.container.event.v1",bootstrapServersProperty="FOUNDATION_KAFKA_BOOTSTRAP_SERVERS")
-class ScanResourceIntegrationTest {
+class ScanResourceIntegrationTest extends AuthenticatedApiTest {
     @Autowired TestRestTemplate http;
     @Autowired JdbcTemplate db;
     @Autowired SourceMapper sources;
     String sourceId;
     static final AtomicBoolean providerReady=new AtomicBoolean(true);
     static final AtomicBoolean providerRuntimeReady=new AtomicBoolean(true);
+    static final AtomicBoolean providerAccessReady=new AtomicBoolean(true);
     static final AtomicReference<Runnable> onProbe=new AtomicReference<>();
     static final HttpServer provider=fakeProvider();
     static HttpServer fakeProvider() {
@@ -45,6 +46,7 @@ class ScanResourceIntegrationTest {
                     if (callback!=null) callback.run();
                     exchange.getResponseHeaders().add("X-Railway-Provider","container-event-v1");
                     if (providerRuntimeReady.get()) exchange.getResponseHeaders().add("X-Railway-Runtime","rest-capability-v1");
+                    if (providerAccessReady.get()) exchange.getResponseHeaders().add("X-Railway-Access","sharing-access-v1");
                     exchange.getResponseHeaders().add("X-Railway-Source-Host",uri().getHost());
                     exchange.getResponseHeaders().add("X-Railway-Source-Port",Integer.toString(uri().getPort()));
                     exchange.getResponseHeaders().add("X-Railway-Source-Database",schema());
@@ -79,6 +81,7 @@ class ScanResourceIntegrationTest {
     @BeforeEach void createSource() {
         providerReady.set(true);
         providerRuntimeReady.set(true);
+        providerAccessReady.set(true);
         onProbe.set(null);
         var response=http.postForObject("/api/v1/sources",Map.of("source_name","扫描测试数据源","source_type","MYSQL",
                 "connection_env_prefix","SOURCE_SCAN"),JsonNode.class);
@@ -110,7 +113,7 @@ class ScanResourceIntegrationTest {
         assertThat(fields.get(0).path("primary_key").asBoolean()).isTrue();
         assertThat(db.queryForObject("SELECT COUNT(*) FROM metadata_scan_field WHERE task_id=?",Integer.class,taskId)).isEqualTo(12);
 
-        var body=Map.of("resource_name","广州港集装箱作业事件数据集","source_id",sourceId,"schema_name",schema(),
+        var body=Map.of("resource_name","广州港集装箱作业事件数据集","source_id",sourceId,"scan_task_id",taskId,"schema_name",schema(),
                 "physical_table","container_event","resource_type","TABLE","business_description","人工确认的作业事件含义",
                 "owner_department","数据管理部","security_level","内部","update_mode","实时");
         var created=http.postForObject("/api/v1/resources",body,JsonNode.class).path("data");
@@ -120,7 +123,7 @@ class ScanResourceIntegrationTest {
         assertThat(http.getForObject("/api/v1/resources/"+id+"/fields",JsonNode.class).path("data").size()).isEqualTo(12);
         var edit=http.exchange("/api/v1/resources/"+id+"/fields/event_time",HttpMethod.PUT,
                 new HttpEntity<>(Map.of("business_name","事件发生时间","business_description","作业发生时刻",
-                        "time_field",true,"sensitivity_level","内部")),JsonNode.class);
+                        "time_field",true,"sensitivity_level","内部","resource_version",1)),JsonNode.class);
         assertThat(edit.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(edit.getBody().path("data").path("time_field").asBoolean()).isTrue();
         var publish=http.postForObject("/api/v1/resources/"+id+"/publish",null,JsonNode.class).path("data");
@@ -130,15 +133,199 @@ class ScanResourceIntegrationTest {
         assertThat(db.queryForObject("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='container_event'",Integer.class)).isZero();
     }
     @Test void rejectsUnscannedTableAndUnknownTask() {
-        var invalid=Map.of("resource_name","虚构表","source_id",sourceId,"schema_name",schema(),"physical_table","missing_table",
+        String taskId=http.postForObject("/api/v1/sources/"+sourceId+"/scan",null,JsonNode.class).path("data").path("task_id").asText();
+        var invalid=Map.of("resource_name","虚构表","source_id",sourceId,"scan_task_id",taskId,"schema_name",schema(),"physical_table","missing_table",
                 "business_description","无","owner_department","部门","security_level","内部","update_mode","每日");
         assertThat(http.postForEntity("/api/v1/resources",invalid,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(http.getForEntity("/api/v1/scan-tasks/SCAN_missing",JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 
+    private String scanSnapshot() {
+        var response=http.postForObject("/api/v1/sources/"+sourceId+"/scan",null,JsonNode.class);
+        assertThat(response.path("data").path("status").asText()).isEqualTo("SUCCESS");
+        return response.path("data").path("task_id").asText();
+    }
+    private Map<String,Object> snapshotResource(String taskId) {
+        return new java.util.HashMap<>(Map.of("resource_name","扫描快照测试资源","source_id",sourceId,"scan_task_id",taskId,
+                "schema_name",schema(),"physical_table","container_event","resource_type","TABLE",
+                "business_description","人工核对所选扫描","owner_department","测试单位","security_level","内部","update_mode","实时"));
+    }
+    private Map<String,Object> fieldEdit(int version,String name) {
+        return Map.of("business_name",name,"business_description","人工维护","time_field",true,
+                "sensitivity_level","内部","resource_version",version);
+    }
+    private ResponseEntity<JsonNode> putResource(String id,Map<String,Object> body) {
+        return http.exchange("/api/v1/resources/"+id,HttpMethod.PUT,new HttpEntity<>(body),JsonNode.class);
+    }
+    private ResponseEntity<JsonNode> putField(String id,String field,Map<String,Object> body) {
+        return http.exchange("/api/v1/resources/"+id+"/fields/"+field,HttpMethod.PUT,new HttpEntity<>(body),JsonNode.class);
+    }
+    private JsonNode resourceFields(String id) { return http.getForObject("/api/v1/resources/"+id+"/fields",JsonNode.class).path("data"); }
+    @Test void resourceAndFieldsRequireFreshVersionsAndConflictsNeverWrite() {
+        var body=snapshotResource(scanSnapshot());
+        String id=http.postForObject("/api/v1/resources",body,JsonNode.class).path("data").path("resource_id").asText();
+        for(var field:resourceFields(id)) assertThat(field.path("resource_version").asInt()).isEqualTo(1);
+        assertThat(putResource(id,body).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        body.put("version",0);assertThat(putResource(id,body).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        var missing=new java.util.HashMap<>(fieldEdit(1,"未保存"));missing.remove("resource_version");
+        assertThat(putField(id,"event_time",missing).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(putField(id,"event_time",fieldEdit(0,"未保存")).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        body.put("version",1);body.put("resource_name","新版资源名称");
+        assertThat(putResource(id,body).getBody().path("data").path("version").asInt()).isEqualTo(2);
+        var beforeFields=resourceFields(id);
+        body.put("resource_name","旧页面覆盖");
+        var conflict=putResource(id,body);
+        assertThat(conflict.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(conflict.getBody().path("code").asInt()).isEqualTo(10009);
+        assertThat(putField(id,"event_time",fieldEdit(1,"旧字段覆盖")).getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(resourceFields(id)).isEqualTo(beforeFields);
+        assertThat(db.queryForObject("SELECT resource_name FROM data_resource WHERE resource_id=?",String.class,id)).isEqualTo("新版资源名称");
+        assertThat(db.queryForObject("SELECT version FROM data_resource WHERE resource_id=?",Integer.class,id)).isEqualTo(2);
+        assertThat(putField(id,"missing",fieldEdit(2,"未保存")).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(db.queryForObject("SELECT version FROM data_resource WHERE resource_id=?",Integer.class,id)).isEqualTo(2);
+        var saved=putField(id,"event_time",fieldEdit(2,"事件发生时间"));
+        assertThat(saved.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(saved.getBody().path("data").path("resource_version").asInt()).isEqualTo(3);
+        for(var field:resourceFields(id)) assertThat(field.path("resource_version").asInt()).isEqualTo(3);
+        assertThat(http.postForEntity("/api/v1/resources/"+id+"/publish",null,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(putField(id,"event_time",fieldEdit(3,"发布前旧输入")).getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(db.queryForObject("SELECT version FROM data_resource WHERE resource_id=?",Integer.class,id)).isEqualTo(4);
+    }
+    private List<ResponseEntity<JsonNode>> simultaneously(java.util.concurrent.Callable<ResponseEntity<JsonNode>> first,
+            java.util.concurrent.Callable<ResponseEntity<JsonNode>> second) throws Exception {
+        var pool=java.util.concurrent.Executors.newFixedThreadPool(2);
+        var ready=new java.util.concurrent.CountDownLatch(2);var go=new java.util.concurrent.CountDownLatch(1);
+        try {
+            var a=pool.submit(()->{ready.countDown();go.await();return first.call();});
+            var b=pool.submit(()->{ready.countDown();go.await();return second.call();});
+            assertThat(ready.await(10,java.util.concurrent.TimeUnit.SECONDS)).isTrue();go.countDown();
+            return List.of(a.get(20,java.util.concurrent.TimeUnit.SECONDS),b.get(20,java.util.concurrent.TimeUnit.SECONDS));
+        } finally { go.countDown();pool.shutdownNow(); }
+    }
+    @Test void concurrentFieldsAndResourceEditsHaveExactlyOneWinner() throws Exception {
+        var body=snapshotResource(scanSnapshot());
+        String id=http.postForObject("/api/v1/resources",body,JsonNode.class).path("data").path("resource_id").asText();
+        var fieldResults=simultaneously(()->putField(id,"event_time",fieldEdit(1,"并发时间字段")),
+                ()->putField(id,"container_no",fieldEdit(1,"并发箱号字段")));
+        assertThat(fieldResults.stream().map(r->r.getStatusCode().value())).containsExactlyInAnyOrder(200,409);
+        assertThat(db.queryForObject("SELECT COUNT(*) FROM resource_field WHERE resource_id=? AND business_name IN ('并发时间字段','并发箱号字段')",Integer.class,id)).isEqualTo(1);
+        assertThat(db.queryForObject("SELECT version FROM data_resource WHERE resource_id=?",Integer.class,id)).isEqualTo(2);
+        body.put("version",2);body.put("owner_department","并发修改单位");
+        var mixed=simultaneously(()->putResource(id,body),()->putField(id,"train_no",fieldEdit(2,"并发车次字段")));
+        assertThat(mixed.stream().map(r->r.getStatusCode().value())).containsExactlyInAnyOrder(200,409);
+        assertThat(db.queryForObject("SELECT owner_department FROM data_resource WHERE resource_id=?",String.class,id)).isEqualTo(
+                mixed.get(0).getStatusCode().is2xxSuccessful()?"并发修改单位":"测试单位");
+        assertThat(db.queryForObject("SELECT business_name FROM resource_field WHERE resource_id=? AND field_name='train_no'",String.class,id)).isEqualTo(
+                mixed.get(1).getStatusCode().is2xxSuccessful()?"并发车次字段":"");
+        assertThat(db.queryForObject("SELECT version FROM data_resource WHERE resource_id=?",Integer.class,id)).isEqualTo(3);
+    }
+    @Test void concurrentPublishAndDeleteNeverLeavePublishedResourceWithoutFields() throws Exception {
+        String id=http.postForObject("/api/v1/resources",snapshotResource(scanSnapshot()),JsonNode.class).path("data").path("resource_id").asText();
+        var results=simultaneously(()->http.postForEntity("/api/v1/resources/"+id+"/publish",null,JsonNode.class),
+                ()->http.exchange("/api/v1/resources/"+id,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class));
+        assertThat(results.stream().filter(r->r.getStatusCode().is2xxSuccessful()).count()).isEqualTo(1);
+        if(results.get(0).getStatusCode().is2xxSuccessful()) {
+            assertThat(results.get(1).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(db.queryForObject("SELECT status FROM data_resource WHERE resource_id=?",String.class,id)).isEqualTo("PUBLISHED");
+            assertThat(resourceFields(id).size()).isEqualTo(12);
+        } else {
+            assertThat(results.get(0).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(db.queryForObject("SELECT COUNT(*) FROM resource_field WHERE resource_id=?",Integer.class,id)).isZero();
+        }
+    }
+    @Test void resourceCopiesSelectedOlderSnapshotAndPreservesImmutableProvenance() {
+        String old=scanSnapshot(),newer=scanSnapshot();
+        db.update("UPDATE metadata_scan_task SET finished_at=DATE_ADD(finished_at,INTERVAL 1 SECOND) WHERE task_id=?",newer);
+        db.update("UPDATE metadata_scan_field SET column_type='varchar(64)',technical_comment='新扫描测试结构' WHERE task_id=? AND field_name='container_no'",newer);
+        String expected=db.queryForObject("SELECT column_type FROM metadata_scan_field WHERE task_id=? AND field_name='container_no'",String.class,old);
+        var body=snapshotResource(old);
+        var response=http.postForEntity("/api/v1/resources",body,JsonNode.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        var resource=response.getBody().path("data");String id=resource.path("resource_id").asText();
+        assertThat(resource.path("scan_task_id").asText()).isEqualTo(old);
+        assertThat(db.queryForObject("SELECT scan_task_id FROM data_resource WHERE resource_id=?",String.class,id)).isEqualTo(old);
+        assertThat(db.queryForObject("SELECT data_type FROM resource_field WHERE resource_id=? AND field_name='container_no'",String.class,id)).isEqualTo(expected);
+        assertThat(http.getForObject("/api/v1/resources/"+id,JsonNode.class).path("data").path("scan_task_id").asText()).isEqualTo(old);
+        body.put("version",1);body.put("scan_task_id",newer);
+        assertThat(http.exchange("/api/v1/resources/"+id,HttpMethod.PUT,new HttpEntity<>(body),JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(db.queryForObject("SELECT version FROM data_resource WHERE resource_id=?",Integer.class,id)).isEqualTo(1);
+        // Existing clients may omit provenance on an ordinary edit; they can never rebind it.
+        body.remove("scan_task_id");body.put("resource_name","只修改资源名称");
+        assertThat(http.exchange("/api/v1/resources/"+id,HttpMethod.PUT,new HttpEntity<>(body),JsonNode.class).getBody().path("data").path("scan_task_id").asText()).isEqualTo(old);
+        assertThat(http.exchange("/api/v1/scan-tasks/"+old,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(http.exchange("/api/v1/scan-tasks/"+newer,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(http.getForObject("/api/v1/resources/"+id+"/fields",JsonNode.class).path("data").size()).isEqualTo(12);
+    }
+    @Test void resourceRejectsInvalidSnapshotOriginsAndRollsBackIncompleteFields() {
+        String task=scanSnapshot();var valid=snapshotResource(task);
+        for(String key:List.of("scan_task_id","source_id","schema_name","physical_table")) {
+            var body=new java.util.HashMap<>(valid);
+            body.put(key,switch(key){case "scan_task_id"->"SCAN_"+"a".repeat(32);case "source_id"->"SRC_"+"a".repeat(32);default->"not_scanned";});
+            assertThat(http.postForEntity("/api/v1/resources",body,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        }
+        var missing=new java.util.HashMap<>(valid);missing.remove("scan_task_id");
+        assertThat(http.postForEntity("/api/v1/resources",missing,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        for(String id:List.of("SCAN_missing","", "SCAN_"+"A".repeat(32))) {
+            var body=new java.util.HashMap<>(valid);body.put("scan_task_id",id);
+            assertThat(http.postForEntity("/api/v1/resources",body,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        }
+        for(String status:List.of("PENDING","RUNNING","FAILED")) {
+            db.update("UPDATE metadata_scan_task SET status=? WHERE task_id=?",status,task);
+            assertThat(http.postForEntity("/api/v1/resources",valid,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        }
+        db.update("UPDATE metadata_scan_task SET status='SUCCESS' WHERE task_id=?",task);
+        db.update("DELETE FROM metadata_scan_field WHERE task_id=? AND field_name='container_no'",task);
+        assertThat(http.postForEntity("/api/v1/resources",valid,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(db.queryForObject("SELECT COUNT(*) FROM data_resource WHERE source_id=?",Integer.class,sourceId)).isZero();
+        assertThat(http.exchange("/api/v1/scan-tasks/"+task,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(http.postForEntity("/api/v1/resources",valid,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+    @Test void concurrentRegistrationAndSnapshotDeletionCannotBothSucceed() throws Exception {
+        String task=scanSnapshot();var body=snapshotResource(task);
+        var start=new java.util.concurrent.CountDownLatch(1);
+        var pool=java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            var create=pool.submit(()->{start.await();return http.postForEntity("/api/v1/resources",body,JsonNode.class);});
+            var delete=pool.submit(()->{start.await();return http.exchange("/api/v1/scan-tasks/"+task,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class);});
+            start.countDown();var created=create.get(15,java.util.concurrent.TimeUnit.SECONDS);var deleted=delete.get(15,java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(List.of(created.getStatusCode(),deleted.getStatusCode())).containsExactlyInAnyOrder(HttpStatus.OK,HttpStatus.BAD_REQUEST);
+            if(created.getStatusCode()==HttpStatus.OK) {
+                String id=created.getBody().path("data").path("resource_id").asText();
+                assertThat(db.queryForObject("SELECT COUNT(*) FROM resource_field WHERE resource_id=?",Integer.class,id)).isEqualTo(12);
+                assertThat(db.queryForObject("SELECT COUNT(*) FROM metadata_scan_field WHERE task_id=?",Integer.class,task)).isEqualTo(12);
+            } else assertThat(db.queryForObject("SELECT COUNT(*) FROM data_resource WHERE source_id=?",Integer.class,sourceId)).isZero();
+        } finally {pool.shutdownNow();}
+    }
+
+    @Test void deletionPreservesReferencedAndPublishedMetadata() {
+        String freeTask=http.postForObject("/api/v1/sources/"+sourceId+"/scan",null,JsonNode.class).path("data").path("task_id").asText();
+        assertThat(http.exchange("/api/v1/scan-tasks/"+freeTask,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(http.getForEntity("/api/v1/scan-tasks/"+freeTask,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+
+        String referencedTask=http.postForObject("/api/v1/sources/"+sourceId+"/scan",null,JsonNode.class).path("data").path("task_id").asText();
+        var resourceBody=new java.util.HashMap<String,Object>(Map.of("resource_name","待删除草稿资源","source_id",sourceId,"scan_task_id",referencedTask,"schema_name",schema(),
+                "physical_table","container_event","business_description","删除规则测试",
+                "owner_department","数据管理部","security_level","内部","update_mode","实时"));
+        String draftId=http.postForObject("/api/v1/resources",resourceBody,JsonNode.class).path("data").path("resource_id").asText();
+        assertThat(http.exchange("/api/v1/scan-tasks/"+referencedTask,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(http.exchange("/api/v1/resources/"+draftId,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(db.queryForObject("SELECT COUNT(*) FROM resource_field WHERE resource_id=?",Integer.class,draftId)).isZero();
+        assertThat(http.exchange("/api/v1/scan-tasks/"+referencedTask,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        resourceBody.put("scan_task_id",http.postForObject("/api/v1/sources/"+sourceId+"/scan",null,JsonNode.class).path("data").path("task_id").asText());
+        String publishedId=http.postForObject("/api/v1/resources",resourceBody,JsonNode.class).path("data").path("resource_id").asText();
+        http.postForObject("/api/v1/resources/"+publishedId+"/publish",null,JsonNode.class);
+        assertThat(http.exchange("/api/v1/resources/"+publishedId,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        var capability=Map.of("capability_name","待删除草稿能力","resource_id",publishedId,"type","REST_API",
+                "http_method","GET","endpoint","/containers/events","protocol","HTTP","auth_type","NONE");
+        String capabilityId=http.postForObject("/api/v1/capabilities",capability,JsonNode.class).path("data").path("capability_id").asText();
+        assertThat(http.exchange("/api/v1/capabilities/"+capabilityId,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(http.getForEntity("/api/v1/capabilities/"+capabilityId,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
     @Test void capabilityRegistryRequiresPublishedResourceAndDoesNotInventVerification() {
-        http.postForObject("/api/v1/sources/"+sourceId+"/scan",null,JsonNode.class);
-        var resourceBody=Map.of("resource_name","能力测试资源","source_id",sourceId,"schema_name",schema(),
+        String taskId=http.postForObject("/api/v1/sources/"+sourceId+"/scan",null,JsonNode.class).path("data").path("task_id").asText();
+        var resourceBody=Map.of("resource_name","能力测试资源","source_id",sourceId,"scan_task_id",taskId,"schema_name",schema(),
                 "physical_table","container_event","business_description","人工确认的事件含义",
                 "owner_department","数据管理部","security_level","内部","update_mode","实时");
         String resourceId=http.postForObject("/api/v1/resources",resourceBody,JsonNode.class).path("data").path("resource_id").asText();
@@ -169,8 +356,17 @@ class ScanResourceIntegrationTest {
         assertThat(kafkaVerified.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(kafkaVerified.getBody().path("data").path("status").asText()).isEqualTo("VERIFIED");
         assertThat(kafkaVerified.getBody().path("data").path("health_status").asText()).isEqualTo("UP");
-        assertThat(http.postForEntity("/api/v1/capabilities/"+kafkaId+"/enable",null,JsonNode.class).getStatusCode())
-                .isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(http.getForObject("/api/v1/capabilities/"+kafkaId+"/kafka-runtime",JsonNode.class).path("data").path("enabled").asBoolean()).isFalse();
+        assertThat(http.postForEntity("/api/v1/capabilities/"+kafkaId+"/enable",null,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(http.getForObject("/api/v1/capabilities/"+kafkaId+"/kafka-runtime",JsonNode.class).path("data").path("enabled").asBoolean()).isTrue();
+        assertThat(http.getForObject("/api/v1/capabilities/"+kafkaId+"/runtime",JsonNode.class).path("data").path("enabled").asBoolean()).isFalse();
+        http.postForObject("/api/v1/capabilities/"+kafkaId+"/disable",null,JsonNode.class);
+        assertThat(http.getForObject("/api/v1/capabilities/"+kafkaId+"/kafka-runtime",JsonNode.class).path("data").path("enabled").asBoolean()).isFalse();
+        var again=http.postForObject("/api/v1/capabilities/"+kafkaId+"/verify",null,JsonNode.class).path("data");
+        assertThat(again.path("status").asText()).isEqualTo("DISABLED");
+        db.update("UPDATE source_system SET status='DISABLED' WHERE source_id=?",sourceId);
+        assertThat(http.postForEntity("/api/v1/capabilities/"+kafkaId+"/enable",null,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        db.update("UPDATE source_system SET status='ENABLED' WHERE source_id=?",sourceId);
         var verified=http.postForEntity("/api/v1/capabilities/"+capId+"/verify",null,JsonNode.class);
         assertThat(verified.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(verified.getBody().path("data").path("status").asText()).isEqualTo("VERIFIED");
@@ -196,8 +392,8 @@ class ScanResourceIntegrationTest {
     }
 
     private String publishedRest() {
-        http.postForObject("/api/v1/sources/"+sourceId+"/scan",null,JsonNode.class);
-        var resource=Map.of("resource_name","REST启停测试资源","source_id",sourceId,"schema_name",schema(),
+        String taskId=http.postForObject("/api/v1/sources/"+sourceId+"/scan",null,JsonNode.class).path("data").path("task_id").asText();
+        var resource=Map.of("resource_name","REST启停测试资源","source_id",sourceId,"scan_task_id",taskId,"schema_name",schema(),
                 "physical_table","container_event","business_description","用于验证真实接口状态",
                 "owner_department","测试单位","security_level","内部","update_mode","实时");
         String resourceId=http.postForObject("/api/v1/resources",resource,JsonNode.class).path("data").path("resource_id").asText();
@@ -225,6 +421,8 @@ class ScanResourceIntegrationTest {
         assertThat(guide.path("http_method").asText()).isEqualTo("GET");
         assertThat(guide.path("header_name").asText()).isEqualTo("X-Capability-Id");
         assertThat(guide.path("header_value").asText()).isEqualTo(id);
+        assertThat(guide.path("required_headers").toString()).isEqualTo("[\"Authorization\",\"X-Relationship-Id\",\"X-Capability-Id\"]");
+        assertThat(guide.path("authorization_note").asText()).contains("有效需求方调用令牌","共享关系");
         assertThat(guide.path("enabled").asBoolean()).isFalse();
         assertThat(guide.toString()).doesNotContain("password","credential_ref","container_no","username");
         assertThat(onProbe.getAndSet(null)).isSameAs(unexpectedProbe);
@@ -254,6 +452,10 @@ class ScanResourceIntegrationTest {
         providerRuntimeReady.set(false);
         assertThat(operation(id,"verify").path("health_status").asText()).isEqualTo("DOWN");
         providerRuntimeReady.set(true);
+        providerAccessReady.set(false);
+        assertThat(operation(id,"verify").path("health_status").asText()).isEqualTo("DOWN");
+        assertThat(http.postForEntity("/api/v1/capabilities/"+id+"/enable",null,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        providerAccessReady.set(true);
         operation(id,"verify");
         providerReady.set(false);
         assertThat(http.postForEntity("/api/v1/capabilities/"+id+"/enable",null,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);

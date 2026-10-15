@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.*;
 
 @EnabledIfEnvironmentVariable(named="RUN_MYSQL_TESTS", matches="true")
 @SpringBootTest(webEnvironment=SpringBootTest.WebEnvironment.RANDOM_PORT)
-class SourceIntegrationTest {
+class SourceIntegrationTest extends AuthenticatedApiTest {
     @Autowired TestRestTemplate http;
     @Autowired SourceMapper mapper;
     @Autowired MetadataAdapterFactory adapters;

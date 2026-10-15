@@ -28,7 +28,7 @@ try{
     status:i===450?'SUCCESS':['SUCCESS','FAILED','RUNNING','PENDING'][i%4],table_count:2,field_count:3,
     started_at:'2026-10-03T01:00:00Z',finished_at:'2026-10-03T01:00:02Z',failure_reason:i%4===1?'测试权限不足':''}))
   const sources=Array.from({length:451},(_,i)=>({source_id:sourceId(i),source_name:i===450?'第451项已启用来源':'扫描来源 '+i,status:i===0?'DISABLED':'ENABLED'}))
-  let fault='',holdTable=false,holdField=false,fieldLabel='原始字段',posts=0
+  let fault='',holdTable=false,holdField=false,fieldLabel='原始字段',posts=0,large=false,scanOutcome='abort'
   const seen=[]
   async function ready(){await page.getByRole('heading',{name:'元数据扫描',exact:true}).waitFor();await page.waitForFunction(()=>!document.querySelector('.el-button.is-loading')&&!document.querySelector('.el-loading-mask'))}
   async function refresh(){await page.getByRole('button',{name:'刷新任务',exact:true}).click();await ready()}
@@ -50,19 +50,31 @@ try{
     const fulfill=(data,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify({code:status===200?0:10001,message:status===200?'success':'测试读取故障',data})})
     if(request.method()!=='GET'){
       assert.equal(key,'sources');assert.equal(parts[5],'scan');posts++
-      await new Promise(resolve=>{releaseScan=resolve});return route.abort('failed') // Never forward fixture writes.
+      const outcome=scanOutcome
+      await new Promise(resolve=>{releaseScan=resolve})
+      if(outcome==='abort')return route.abort('failed') // Never forward fixture writes.
+      return fulfill(outcome==='foreign'?tasks[0]:tasks[450])
     }
     if(key==='scan-tasks'&&parts[5]==='tables'){
       if(parts[7]==='fields'){
         const label=fieldLabel
         if(holdField){holdField=false;await new Promise(resolve=>{releaseField=resolve})}
         if(fault==='fields')return fulfill(null,503)
+        if(fault==='field-foreign')return fulfill([{field_name:'foreign_field',table_name:'another_table'}])
+        if(fault==='field-duplicate')return fulfill([{field_name:'id'},{field_name:'id'}])
+        if(fault==='field-shape')return fulfill({field_name:'wrong_shape'})
+        if(fault==='field-mode')return fulfill([{field_name:'demo_field',_demo:true}])
+        if(large)return fulfill(Array.from({length:125},(_,i)=>({field_name:'field_'+i,column_type:'varchar(30)',technical_comment:i===124?'末尾目标字段':'结构字段 '+i})))
         return fulfill([{field_name:'id',data_type:'bigint',primary_key:true,nullable:false,technical_comment:label},
           {field_name:'event_time',column_type:'datetime(3)',nullable:false,technical_comment:'作业发生时间'},
           {field_name:'container_no',column_type:'varchar(20)',nullable:true,technical_comment:'集装箱号'}])
       }
       if(holdTable&&id===taskId(0)){holdTable=false;await new Promise(resolve=>{releaseTable=resolve})}
       if(fault==='tables')return fulfill(null,503)
+      if(fault==='table-foreign')return fulfill([{task_id:taskId(999),schema_name:'port',table_name:'foreign_table'}])
+      if(fault==='table-duplicate')return fulfill([{schema_name:'port',table_name:'duplicate'},{schema_name:'port',table_name:'duplicate'}])
+      if(fault==='table-shape')return fulfill({table_name:'wrong_shape'})
+      if(large)return fulfill(Array.from({length:25},(_,i)=>({task_id:id,schema_name:'port_source_db',table_name:i===0?'container_event':'table_'+i,table_comment:i===24?'末尾目标表':'表结构 '+i,field_count:125,estimated_rows:20})))
       return fulfill([{table_name:'container_event',schema_name:'port_source_db',table_comment:'事件表 '+id,field_count:3,estimated_rows:20},
         {table_name:'train_dispatch',schema_name:'port_source_db',table_comment:'调度表',field_count:3,estimated_rows:12}])
     }
@@ -141,7 +153,67 @@ try{
   assert.equal(await page.locator('[data-task-id]').count(),0);assert.equal(await table().getByRole('row').count(),1)
   await screenshot('scan-catalog-failure')
   fault='';await refresh();await screenshot('scan-catalog-workspace')
+  // Large metadata sets remain usable; paging/search/reset never re-fetch business rows.
+  await selectTask(0);large=true;await page.getByRole('button',{name:'重新加载结果',exact:true}).click();await ready()
+  assert.match(await page.getByTestId('scan-table-count').textContent(),/已读取 25 张表/)
+  assert.equal(await table().getByRole('row').count(),11)
+  await page.getByTestId('scan-table-pager').getByRole('button',{name:'下一页',exact:true}).click()
+  await page.getByText('table_10',{exact:true}).waitFor()
+  await page.getByLabel('扫描表关键词',{exact:true}).fill('末尾 目标');await page.getByText('table_24',{exact:true}).waitFor()
+  assert.equal(await table().getByRole('row').count(),2)
+  await page.getByLabel('扫描表关键词',{exact:true}).fill('container');await page.getByRole('button',{name:'查看字段',exact:true}).click()
+  await page.getByTestId('scan-field-count').waitFor();assert.match(await page.getByTestId('scan-field-count').textContent(),/125 个字段/)
+  assert.equal(await fields().getByRole('row').count(),11)
+  await page.getByTestId('scan-field-pager').getByRole('button',{name:'下一页',exact:true}).click()
+  await page.getByText('field_10',{exact:true}).waitFor()
+  assert.match(await fields().getByRole('row').nth(1).textContent(),/11$/)
+  await page.getByLabel('扫描字段关键词',{exact:true}).fill('末尾 目标');await page.getByText('field_124',{exact:true}).waitFor()
+  assert.equal(await fields().getByRole('row').count(),2)
+  assert.match(await fields().getByRole('row').nth(1).textContent(),/125$/)
+  await screenshot('scan-catalog-large-fields')
+  await page.getByRole('dialog').locator('.el-drawer__close-btn').click()
+  await page.getByLabel('扫描表关键词',{exact:true}).fill('')
+  await page.getByTestId('scan-table-pager').getByRole('button',{name:'下一页',exact:true}).click()
+  await selectTask(4);await page.getByText('container_event',{exact:true}).waitFor() // New task resets page.
+  await screenshot('scan-catalog-large-tables')
+  large=false
+  for(const invalid of ['table-foreign','table-duplicate','table-shape']){
+    fault=invalid;await page.getByRole('button',{name:'重新加载结果',exact:true}).click();await ready()
+    await page.getByTestId('scan-table-error').waitFor();assert.equal(await table().count(),0)
+  }
+  fault='';await page.getByRole('button',{name:'重新加载结果',exact:true}).click();await ready()
+  for(const invalid of ['field-foreign','field-duplicate','field-shape','field-mode']){
+    fault=invalid;await page.getByRole('button',{name:'查看字段',exact:true}).first().click()
+    await page.getByTestId('scan-field-error').waitFor();assert.equal(await fields().count(),0)
+    assert.equal(await page.getByRole('button',{name:'从此表创建资源',exact:true}).isDisabled(),true)
+    await page.getByRole('dialog').locator('.el-drawer__close-btn').click()
+  }
+  fault='';scanOutcome='foreign'
+  await sourceSelect.focus();await sourceSelect.press('ArrowDown');await page.getByRole('option',{name:'第451项已启用来源',exact:true}).click()
+  await scanButton.click();await waitGate(()=>releaseScan);releaseScan();releaseScan=null
+  await page.getByText('扫描响应无法确认，请刷新任务检查，不要重复发起扫描',{exact:true}).waitFor()
+  assert.match(await page.locator('.selected-summary').textContent(),new RegExp(taskId(4)))
+  if(await page.locator('.el-message').count())await page.locator('.el-message').last().waitFor({state:'hidden'})
+  // A successful old write cannot replace a manually selected task or refresh a new mount.
+  scanOutcome='valid';await scanButton.click();await waitGate(()=>releaseScan);await selectTask(0)
+  const readsBefore=seen.length;releaseScan();releaseScan=null;await ready();await page.waitForTimeout(100)
+  assert.equal(seen.length,readsBefore);assert.match(await page.locator('.selected-summary').textContent(),new RegExp(taskId(0)))
+  scanOutcome='abort';await scanButton.click();await waitGate(()=>releaseScan);await routeTask(taskId(4))
+  const readsAfterRoute=seen.length;releaseScan();releaseScan=null;await ready();await page.waitForTimeout(100)
+  assert.equal(seen.length,readsAfterRoute);assert.equal(await page.locator('.el-message').count(),0)
+  assert.match(await page.locator('.selected-summary').textContent(),new RegExp(taskId(4)))
+  scanOutcome='valid'
+  await scanButton.click();await waitGate(()=>releaseScan)
+  await page.evaluate(()=>{history.pushState({},'', '/about');dispatchEvent(new PopStateEvent('popstate'))})
+  await page.getByRole('heading',{name:'系统说明',exact:true}).waitFor()
+  const readsAfterLeave=seen.length;releaseScan();releaseScan=null;await page.waitForTimeout(150)
+  assert.equal(seen.length,readsAfterLeave);assert.equal(await page.getByText('扫描完成',{exact:true}).count(),0)
+  await page.evaluate(()=>{history.pushState({},'', '/scans');dispatchEvent(new PopStateEvent('popstate'))});await ready()
+  await sourceSelect.focus();await sourceSelect.press('ArrowDown');await page.getByRole('option',{name:'第451项已启用来源',exact:true}).click()
+  await scanButton.click();await waitGate(()=>releaseScan);releaseScan();releaseScan=null;await ready()
+  await page.getByText('扫描完成',{exact:true}).waitFor()
+  assert.match(await page.locator('.selected-summary').textContent(),new RegExp(taskId(450)))
   assert.deepEqual(errors,[])
-  console.log('Scan catalog passed: real counts; 451 tasks/sources; task/table/field filters; refresh statuses; stale table/field isolation; direct task routes; failure/retry; duplicate scan prevented. Fixture writes intercepted.')
+  console.log('Scan catalog passed: real counts; 451 tasks/sources; 25 tables/125 fields pagination/search/reset; ownership/shape/duplicate/mode rejection; stale scan selection/unmount isolation; valid scan refresh; existing routes/errors/duplicate-submit checks. Fixture writes intercepted.')
 }catch(error){await page?.screenshot({path:'.runtime/scan-catalog-error.png',fullPage:true}).catch(()=>{});throw error}
 finally{releaseTable?.();releaseField?.();releaseScan?.();await browser?.close();await server.close()}

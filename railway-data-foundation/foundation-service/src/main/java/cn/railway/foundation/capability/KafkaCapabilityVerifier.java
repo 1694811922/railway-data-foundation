@@ -24,28 +24,33 @@ public class KafkaCapabilityVerifier {
 
     /** Metadata-only probe: no Kafka consumer and no business payload in Foundation. */
     public boolean probe(CapabilityService.Capability capability) {
+        requireConfigured(capability);
+        final Properties config;
+        try { config=KafkaClientSettings.create(environment,"FOUNDATION_KAFKA_",capability.authType()); }
+        catch(IllegalArgumentException e){throw new BusinessException(ErrorCode.BUSINESS_ERROR,e.getMessage());}
+        config.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG,3000);
+        config.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG,4000);
+        final AdminClient admin;
+        try {admin=AdminClient.create(config);} catch(org.apache.kafka.common.KafkaException ex){return false;}
+        try {
+            var info=admin.describeTopics(List.of(capability.topic())).allTopicNames().get(5,TimeUnit.SECONDS).get(capability.topic());
+            return info!=null && !info.partitions().isEmpty()
+                    && info.partitions().stream().allMatch(partition->partition.leader()!=null);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();return false;
+        } catch (ExecutionException | TimeoutException | org.apache.kafka.common.KafkaException ex) {
+            return false;
+        } finally {admin.close(java.time.Duration.ofSeconds(1));}
+    }
+    public void requireConfigured(CapabilityService.Capability capability) {
         if (!"KAFKA_TOPIC".equals(capability.type()) || !"KAFKA".equals(capability.protocol())
-                || !"NONE".equals(capability.authType()))
-            throw new BusinessException(ErrorCode.BUSINESS_ERROR,"当前仅支持无认证的 Kafka Topic 元数据验证");
+                || !java.util.Set.of("NONE","SASL").contains(capability.authType()))
+            throw new BusinessException(ErrorCode.BUSINESS_ERROR,"仅支持指定Kafka消息主题的运行时控制");
         String configuredTopic=environment.getProperty("FOUNDATION_KAFKA_TOPIC","");
         if (!configuredTopic.equals(capability.topic()) || configuredTopic.isBlank())
             throw new BusinessException(ErrorCode.BUSINESS_ERROR,"能力 Topic 与 Provider 配置不一致");
         binding.requireSupported(capability.resourceId());
-        String brokers=environment.getProperty("FOUNDATION_KAFKA_BOOTSTRAP_SERVERS","");
-        if (brokers.isBlank()) throw new BusinessException(ErrorCode.BUSINESS_ERROR,"Kafka 地址尚未配置");
-        var config=new Properties();
-        config.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG,brokers);
-        config.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG,3000);
-        config.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG,4000);
-        try (var admin=AdminClient.create(config)) {
-            var info=admin.describeTopics(List.of(configuredTopic)).allTopicNames().get(5,TimeUnit.SECONDS).get(configuredTopic);
-            return info!=null && !info.partitions().isEmpty()
-                    && info.partitions().stream().allMatch(partition->partition.leader()!=null);
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-            return false;
-        } catch (ExecutionException | TimeoutException | IllegalArgumentException ex) {
-            return false;
-        }
+        try {KafkaClientSettings.create(environment,"FOUNDATION_KAFKA_",capability.authType());}
+        catch(IllegalArgumentException e){throw new BusinessException(ErrorCode.BUSINESS_ERROR,e.getMessage());}
     }
 }

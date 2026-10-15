@@ -21,4 +21,8 @@ public class ResourceController {
     @GetMapping("/{id}/fields") public ApiResponse<List<ResourceService.Field>> fields(@PathVariable String id) { return ApiResponse.success(service.fields(id)); }
     @PutMapping("/{id}/fields/{fieldName}") public ApiResponse<ResourceService.Field> updateField(@PathVariable String id,@PathVariable String fieldName,
             @Valid @RequestBody FieldUpdateRequest request) { return ApiResponse.success(service.updateField(id,fieldName,request)); }
+    @DeleteMapping("/{id}") public ApiResponse<Void> delete(@PathVariable String id) {
+        service.delete(id);
+        return ApiResponse.success(null);
+    }
 }

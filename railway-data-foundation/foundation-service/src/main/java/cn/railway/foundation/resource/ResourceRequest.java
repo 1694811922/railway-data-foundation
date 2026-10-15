@@ -3,6 +3,7 @@ package cn.railway.foundation.resource;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
@@ -10,6 +11,7 @@ import jakarta.validation.constraints.Size;
 public record ResourceRequest(
         @NotBlank @Size(max=120) String resourceName,
         @NotBlank String sourceId,
+        @Pattern(regexp="SCAN_[a-f0-9]{32}") String scanTaskId,
         String sourceName,
         @NotBlank @Size(max=64) String schemaName,
         @NotBlank @Size(max=64) String physicalTable,
@@ -17,4 +19,5 @@ public record ResourceRequest(
         @NotBlank @Size(max=2000) String businessDescription,
         @NotBlank @Size(max=120) String ownerDepartment,
         @NotBlank @Pattern(regexp="公开|内部|敏感|机密") String securityLevel,
-        @NotBlank @Pattern(regexp="实时|每日|按需") String updateMode) {}
+        @NotBlank @Pattern(regexp="实时|每日|按需") String updateMode,
+        @Min(1) Integer version) {}

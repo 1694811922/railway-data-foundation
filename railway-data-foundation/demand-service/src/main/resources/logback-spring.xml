@@ -1,0 +1,15 @@
+<configuration>
+  <springProperty scope="context" name="receiverLog" source="DEMAND_LOG_FILE" defaultValue=".runtime/demand-service.log"/>
+  <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>${receiverLog}</file>
+    <encoder><pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{48} - %msg%n</pattern><charset>UTF-8</charset></encoder>
+    <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+      <fileNamePattern>${receiverLog}.%d{yyyy-MM-dd}.%i.gz</fileNamePattern>
+      <maxFileSize>10MB</maxFileSize><maxHistory>7</maxHistory><totalSizeCap>70MB</totalSizeCap>
+    </rollingPolicy>
+  </appender>
+  <logger name="org.apache.kafka" level="ERROR"/>
+  <logger name="org.springframework.web" level="INFO"/>
+  <logger name="org.springframework.jdbc" level="INFO"/>
+  <root level="INFO"><appender-ref ref="FILE"/></root>
+</configuration>

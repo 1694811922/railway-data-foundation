@@ -1,5 +1,7 @@
 package cn.railway.foundation.metadata;
 
+import cn.railway.foundation.security.Actor;
+import cn.railway.foundation.security.WorkspaceGate;
 import cn.railway.foundation.api.BusinessException;
 import cn.railway.foundation.api.ErrorCode;
 import cn.railway.foundation.source.SourceEntity;
@@ -9,6 +11,7 @@ import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -66,8 +69,8 @@ public class ScanService {
     }
 
     public List<Task> list(int limit,int offset) {
-        return db.query("SELECT t.*,s.source_name,(SELECT COALESCE(SUM(st.field_count),0) FROM metadata_scan_table st WHERE st.task_id=t.task_id) AS field_count FROM metadata_scan_task t JOIN source_system s ON s.source_id=t.source_id ORDER BY t.started_at DESC,t.task_id DESC LIMIT ? OFFSET ?",
-                (rs,n)->taskRow(rs),limit,offset);
+        return db.query("SELECT t.*,s.source_name,(SELECT COALESCE(SUM(st.field_count),0) FROM metadata_scan_table st WHERE st.task_id=t.task_id) AS field_count FROM metadata_scan_task t JOIN source_system s ON s.source_id=t.source_id WHERE "+Actor.source("s")+" ORDER BY t.started_at DESC,t.task_id DESC LIMIT ? OFFSET ?",
+                (rs,n)->taskRow(rs),Actor.args(limit,offset));
     }
     public Task task(String id) {
         var rows=db.query("SELECT t.*,s.source_name,(SELECT COALESCE(SUM(st.field_count),0) FROM metadata_scan_table st WHERE st.task_id=t.task_id) AS field_count FROM metadata_scan_task t JOIN source_system s ON s.source_id=t.source_id WHERE t.task_id=?",
@@ -94,6 +97,21 @@ public class ScanService {
                 (rs,n)->new Field(rs.getString("field_name"),rs.getString("data_type"),rs.getString("column_type"),
                         rs.getBoolean("nullable"),rs.getBoolean("primary_key"),rs.getString("default_value"),
                         rs.getString("technical_comment"),rs.getInt("ordinal_position")),taskId,tableName);
+    }
+    @Transactional
+    public void delete(String taskId) {
+        // Serialize deletion with resource registration before removing snapshot fields.
+        db.query("SELECT task_id FROM metadata_scan_task WHERE task_id=? FOR UPDATE",(rs,n)->rs.getString(1),taskId);
+        var current=task(taskId);
+        if ("RUNNING".equals(current.status()) || "PENDING".equals(current.status()))
+            throw new BusinessException(ErrorCode.BUSINESS_ERROR,"运行中的扫描任务不能删除");
+        Integer resources=db.queryForObject("SELECT COUNT(*) FROM data_resource WHERE scan_task_id=?",Integer.class,taskId);
+        if (resources!=null && resources>0)
+            throw new BusinessException(ErrorCode.BUSINESS_ERROR,"扫描任务已被数据资源引用，不能删除");
+        db.update("DELETE FROM metadata_scan_field WHERE task_id=?",taskId);
+        db.update("DELETE FROM metadata_scan_table WHERE task_id=?",taskId);
+        if (db.update("DELETE FROM metadata_scan_task WHERE task_id=?",taskId)!=1)
+            throw new BusinessException(ErrorCode.NOT_FOUND,"扫描任务不存在");
     }
     private static LocalDateTime now() { return LocalDateTime.now(ZoneOffset.UTC); }
 }

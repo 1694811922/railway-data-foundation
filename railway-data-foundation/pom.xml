@@ -4,5 +4,5 @@
   <groupId>cn.railway</groupId><artifactId>railway-data-foundation</artifactId><version>0.1.0-SNAPSHOT</version><packaging>pom</packaging>
   <name>铁路统一数据底座虚拟接入与共享治理原型系统</name>
   <properties><java.version>17</java.version><mybatis-plus.version>3.5.12</mybatis-plus.version><springdoc.version>2.8.13</springdoc.version></properties>
-  <modules><module>foundation-service</module><module>provider-service</module></modules>
+  <modules><module>foundation-service</module><module>provider-service</module><module>demand-service</module></modules>
 </project>
