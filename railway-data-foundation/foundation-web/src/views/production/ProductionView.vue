@@ -1,18 +1,21 @@
 <script setup>
-import { computed,onBeforeUnmount,onMounted,reactive,ref,watch } from 'vue'
+import { computed,nextTick,onBeforeUnmount,onMounted,reactive,ref,watch } from 'vue'
 import KafkaProductionLogs from '../../components/KafkaProductionLogs.vue'
 import { useRoute } from 'vue-router'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage,ElMessageBox } from 'element-plus'
 import { capabilityApi } from '../../api/capability'
 import { productionApi } from '../../api/production'
 import { explicitDemo,session } from '../../utils/sessionState'
-import { productionLabels,productionCounts,recordPage,sendSelected } from '../../utils/production'
-const logVisible=ref(false)
+import { productionLabels,productionCounts,productionFeedback,recordPage,sendSelected } from '../../utils/production'
+const activityTab=ref('history'),activityPanel=ref(null),allHistory=ref(false)
 const route=useRoute(), candidates=ref([]),capability=ref(''),context=ref(null),rows=ref([]),selected=ref([]),total=ref(0),page=ref(1),size=ref(20)
 const error=ref(''),loading=ref(false),optionsLoading=ref(false),optionsError=ref(''),hasMore=ref(true),sending=ref(false),cancelled=ref(false),results=ref([]),record=ref(null)
 const filters=reactive({containerNo:'',trainNo:'',eventType:'',range:[]})
 let active=true,read=0,scope=0,optionsOffset=0,optionRead=0
 const counts=computed(()=>productionCounts(results.value))
+const feedback=computed(()=>productionFeedback(results.value,{sending:sending.value,cancelled:cancelled.value}))
+const currentResults=computed(()=>new Map(results.value.map(row=>[row.id,row])))
+async function showHistory(){if(sending.value)return;activityTab.value='history';await nextTick();activityPanel.value?.scrollIntoView({behavior:'smooth',block:'start'})}
 const chosen=computed(()=>candidates.value.find(row=>row.capability_id===capability.value))
 const eligible=row=>row.type==='KAFKA_TOPIC'&&row.status==='ENABLED'&&row.health_status==='UP'
 const message=e=>e?.response?.data?.message||e.message||'操作失败，请重试'
@@ -38,14 +41,17 @@ async function send(items){if(sending.value||loading.value||!context.value||expl
  try{await ElMessageBox.confirm(`将 ${items.length} 条源记录发送到 ${topic}。重复发送会产生新消息。`,'确认发送',{confirmButtonText:'发送',cancelButtonText:'取消',type:'warning'})
   if(!active||currentScope!==scope||epoch!==session.epoch)return
   results.value=items.map(row=>({id:row.id,state:'PENDING',reason:'',receipt:null}))
+  activityTab.value='current';await nextTick();activityPanel.value?.scrollIntoView({behavior:'smooth',block:'start'})
   await sendSelected(results.value,{send:recordId=>productionApi.send(id,recordId),topic,current:()=>active&&currentScope===scope&&epoch===session.epoch,cancelled:()=>cancelled.value,changed:()=>{}})
+  if(active&&currentScope===scope&&epoch===session.epoch){const notice=productionFeedback(results.value,{cancelled:cancelled.value});ElMessage({type:notice.type,message:notice.title,duration:5000,showClose:true})}
  }catch(e){if(e!=='cancel'&&e!=='close'&&active&&currentScope===scope)error.value=message(e)}finally{if(active&&currentScope===scope)sending.value=false}}
 watch(capability,()=>{scope++;read++;results.value=[];context.value=null;clearData();page.value=1;load()})
-watch(()=>session.epoch,()=>{scope++;read++;optionRead++;cancelled.value=true;sending.value=false;clearData();context.value=null;results.value=[];candidates.value=[]})
+watch(()=>session.epoch,()=>{scope++;read++;optionRead++;cancelled.value=true;sending.value=false;clearData();context.value=null;results.value=[];candidates.value=[];allHistory.value=false})
 onMounted(options);onBeforeUnmount(()=>{active=false;scope++;read++;optionRead++;cancelled.value=true;clearData();results.value=[];context.value=null})
 </script>
 <template>
- <div><div class="page-heading"><h2>数据发送</h2><el-button :disabled="sending||explicitDemo" @click="logVisible=true">发送记录</el-button></div>
+ <div><div class="page-heading"><h2>数据发送</h2><el-button type="primary" plain :disabled="sending||explicitDemo" @click="showHistory">历史发送记录</el-button></div>
+  <el-alert v-if="results.length" :title="feedback.title" :type="feedback.type" :closable="false" show-icon class="send-feedback" data-testid="send-feedback" />
   <el-alert v-if="explicitDemo" title="演示模式不读取真实源记录，也不发送消息" type="info" :closable="false" />
   <el-card v-else>
    <el-alert v-if="optionsError" :title="optionsError" type="error" :closable="false"><el-button @click="options">重试加载能力</el-button></el-alert>
@@ -61,17 +67,24 @@ onMounted(options);onBeforeUnmount(()=>{active=false;scope++;read++;optionRead++
    <el-alert v-if="error" :title="error" type="error" :closable="false"><el-button :disabled="sending" @click="load">重试查询</el-button></el-alert>
    <el-table :data="rows" v-loading="loading" @selection-change="selected=$event" row-key="id">
     <el-table-column type="selection" :selectable="()=>!sending" width="50" /><el-table-column prop="id" label="记录编号" width="100" /><el-table-column prop="container_no" label="集装箱编号" min-width="160" /><el-table-column prop="event_type" label="事件类型" width="130" /><el-table-column prop="event_time" label="事件时间" min-width="190" /><el-table-column prop="train_no" label="车次" width="120" /><el-table-column prop="operation_status" label="作业状态" width="130" />
-    <el-table-column label="操作" width="160"><template #default="{row}"><el-button link @click="record=row">查看</el-button><el-button link type="primary" :disabled="sending||!context" @click="send([row])">发送</el-button></template></el-table-column>
+    <el-table-column label="本次发送" width="120"><template #default="{row}"><el-tag v-if="currentResults.has(row.id)" :type="currentResults.get(row.id).state==='SUCCESS'?'success':currentResults.get(row.id).state==='NOT_SENT'?'danger':'warning'">{{productionLabels[currentResults.get(row.id).state]}}</el-tag><span v-else>—</span></template></el-table-column>
+    <el-table-column label="操作" width="160"><template #default="{row}"><el-button link @click="record=row">查看</el-button><el-button link type="primary" :loading="currentResults.get(row.id)?.state==='SENDING'" :disabled="sending||!context" @click="send([row])">发送</el-button></template></el-table-column>
    </el-table>
    <el-pagination :current-page="page" :page-size="size" :page-sizes="[10,20,50]" :total="total" :disabled="sending" layout="total,sizes,prev,pager,next" @current-change="page=$event;load()" @size-change="size=$event;query()" />
   </el-card>
-  <el-card v-if="results.length" class="results"><h3>本次发送结果</h3><p>发送成功 {{counts.SUCCESS}} · 未发送 {{counts.NOT_SENT}} · 结果待确认 {{counts.UNCONFIRMED}} · 未开始 {{counts.PENDING}}</p><el-alert title="发送成功表示Kafka已确认接收；需求方是否落库请在数据接收页面核对" type="info" :closable="false" />
+  <div ref="activityPanel" class="activity"><el-card>
+   <el-tabs v-model="activityTab">
+    <el-tab-pane label="本次发送结果" name="current"><div class="results">
+    <el-empty v-if="!results.length" description="尚未发送，请选择源记录后发送" />
+    <template v-else><div class="result-heading"><h3>{{feedback.title}}</h3><el-button v-if="sending" :disabled="cancelled" @click="cancelled=true">取消后续发送</el-button><el-button v-else @click="showHistory">查看历史发送记录</el-button></div><el-progress :percentage="feedback.progress" :status="!sending&&feedback.type==='success'?'success':undefined" /><p>发送成功 {{counts.SUCCESS}} · 未发送 {{counts.NOT_SENT}} · 结果待确认 {{counts.UNCONFIRMED}} · 未开始 {{counts.PENDING}}</p><el-alert title="Kafka已接收不代表需求方已落库；历史记录由服务端保存，上报可能有延迟。" type="info" :closable="false" />
    <el-table :data="results"><el-table-column prop="id" label="源记录编号" width="130" /><el-table-column label="发送状态" width="140"><template #default="{row}"><el-tag :type="row.state==='SUCCESS'?'success':row.state==='UNCONFIRMED'?'warning':row.state==='NOT_SENT'?'danger':'info'">{{productionLabels[row.state]}}</el-tag></template></el-table-column><el-table-column label="主题" min-width="200"><template #default="{row}">{{row.receipt?.topic||'—'}}</template></el-table-column><el-table-column label="分区" width="80"><template #default="{row}">{{row.receipt?.partition??'—'}}</template></el-table-column><el-table-column label="消息位置" width="110"><template #default="{row}">{{row.receipt?.offset??'—'}}</template></el-table-column><el-table-column prop="reason" label="错误或提示" min-width="220" /></el-table>
-  </el-card>
+    </template></div></el-tab-pane>
+    <el-tab-pane label="历史发送记录" name="history" :disabled="sending" lazy><el-checkbox v-model="allHistory">查看本方全部能力</el-checkbox><KafkaProductionLogs v-if="activityTab==='history'&&!explicitDemo" :capability-id="allHistory?'':capability" /></el-tab-pane>
+   </el-tabs>
+  </el-card></div>
   <el-dialog :model-value="!!record" title="源记录详情" width="700px" @close="record=null"><pre v-if="record">{{JSON.stringify(record,null,2)}}</pre></el-dialog>
  </div>
-<el-drawer v-model="logVisible" title="本方发送记录" size="90%" destroy-on-close><KafkaProductionLogs v-if="logVisible" /></el-drawer>
 </template>
 <style scoped>
-.filters{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:16px}.filters .el-form-item:last-child{grid-column:span 2}.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}.binding{margin:16px 0}.results{margin-top:20px}.el-pagination{margin-top:20px}pre{white-space:pre-wrap;overflow-wrap:anywhere} @media(max-width:1000px){.filters{grid-template-columns:1fr 1fr}}
+.filters{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:16px}.filters .el-form-item:last-child{grid-column:span 2}.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}.binding{margin:16px 0}.activity{margin-top:20px;scroll-margin-top:85px}.result-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}.send-feedback{margin-bottom:16px}.el-pagination{margin-top:20px}pre{white-space:pre-wrap;overflow-wrap:anywhere} @media(max-width:1000px){.filters{grid-template-columns:1fr 1fr}}
 </style>
