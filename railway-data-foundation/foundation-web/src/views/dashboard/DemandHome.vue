@@ -10,7 +10,7 @@ import { fetchDashboardList } from '../../utils/dashboard'
 const router=useRouter(),cards=ref([]),error=ref(''),loading=ref(false);let active=true
 async function load(){loading.value=true;cards.value=[];error.value='';try{
  const data=await Promise.all([fetchDashboardList(resourceApi.list,'resource_id'),fetchDashboardList(sharingApi.list,'relationship_id'),subscriptionApi.list({limit:1,offset:0}),fetchDashboardList(credentialApi.list,'credential_id')])
- if(active)cards.value=[['可发现资源',data[0].rows.length,'/resources'],['我的共享申请',data[1].rows.length,'/relationships'],['我的 Kafka 订阅',data[2].total,'/kafka-subscriptions'],['我的访问凭据',data[3].rows.length,'/credentials']]
+ if(active)cards.value=[['可发现资源',data[0].rows.length,'/resources'],['我的共享申请',data[1].rows.length,'/relationships'],['我的 Kafka 订阅',data[2].total,'/kafka-subscriptions'],['我的REST调用凭据',data[3].rows.length,'/credentials']]
  }catch(e){if(active)error.value=e.response?.data?.message||'工作台读取失败'}finally{if(active)loading.value=false}}
 onMounted(load);onBeforeUnmount(()=>{active=false})
 </script>

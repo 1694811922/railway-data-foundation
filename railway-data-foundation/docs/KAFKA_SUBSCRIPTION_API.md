@@ -1,5 +1,7 @@
 # Kafka 整主题订阅审批与权限执行接口
 
+2026-10-17界面调整：管理员通过“共享治理→共享授权→Kafka订阅”进入，原/kafka-subscriptions管理员链接自动定位此页签；供需双方路径保留。审批状态和Broker权限执行状态、一次性凭据、撤权及重试规则保持独立，不与REST字段策略混用。见[入口精简说明](SHARING_GOVERNANCE_SIMPLIFICATION.md)。
+
 ## 提供方确认补充（2026-10-13）
 
 新有归属申请必须“需求方提交 → 提供方确认 → 管理员最终审批”。新增 `provider_review_mode` 和 `provider_confirmed_at`，确认后保持PENDING并增加版本，历史使用真实登录身份。LEGACY存量与ADMIN_MANAGED无归属管理员流程不补造确认。

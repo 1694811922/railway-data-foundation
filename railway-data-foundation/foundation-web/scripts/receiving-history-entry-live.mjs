@@ -23,6 +23,19 @@ try{
  const drawer=page.locator('.el-drawer:visible');await drawer.getByRole('button',{name:'查看内容',exact:true}).first().waitFor();assert.equal(await drawer.getByRole('button',{name:'查看内容',exact:true}).count(),Math.min(20,config.expected_messages+3))
  assert.equal(await page.locator('.el-dialog:visible').count(),0);assert.equal(await page.locator('input[type=password]').count(),0)
  await page.screenshot({path:path.join(config.evidence,'receiver-revoked-history-entry.png'),fullPage:true,animations:'disabled'})
+ await page.goto(base+'/receiving',{waitUntil:'networkidle'})
+ const taskRow=page.locator('tbody tr').filter({hasText:task.task_name})
+ const progressReply=page.waitForResponse(r=>r.url().endsWith(`/receiving-tasks/${config.task_id}/progress`))
+ await taskRow.getByRole('button',{name:'接收进度',exact:true}).click();assert.equal((await progressReply).status(),403)
+ const progress=page.getByRole('dialog',{name:'接收进度',exact:true});await progress.locator('.el-alert--error').waitFor()
+ assert.equal(new URL(page.url()).pathname,'/receiving');assert.equal((await page.request.get(base+'/api/v1/auth/me')).status(),200)
+ await progress.getByRole('button',{name:'重试',exact:true}).click();await progress.locator('.el-alert--error').waitFor();assert.equal(new URL(page.url()).pathname,'/receiving')
+ await page.screenshot({path:path.join(config.evidence,'receiver-progress-revoked-stays-logged-in.png'),fullPage:true,animations:'disabled'})
+ await progress.getByRole('button',{name:'关闭',exact:true}).click()
+ // Genuine expired sessions must still clear identity and return to login.
+ const csrf=(await (await page.request.get(base+'/api/v1/auth/csrf')).json()).data
+ assert.equal((await page.request.post(base+'/api/v1/auth/logout',{headers:{[csrf.header_name]:csrf.token}})).status(),200)
+ await taskRow.getByRole('button',{name:'接收进度',exact:true}).click();await page.waitForURL('**/login**')
  assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);assert.deepEqual(errors,[])
- console.log(`真实撤权后订阅入口通过：打开本主体已有阻塞任务及${config.expected_messages+3}条历史消息，不重新领取凭据或创建任务。`)
+ console.log(`真实撤权后历史入口与进度通过：保留${config.expected_messages+3}条历史消息，订阅失效403保留网页登录，真实登录失效401跳转登录。`)
 }finally{await browser?.close();await server.close()}

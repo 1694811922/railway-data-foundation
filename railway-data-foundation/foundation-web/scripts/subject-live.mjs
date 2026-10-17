@@ -25,7 +25,7 @@ try {
   async function closeSaved(){await dialog().waitFor({state:'hidden'});await ready()}
   async function waitGate(){const end=Date.now()+10000;while(!release){assert.ok(Date.now()<end);await new Promise(resolve=>setTimeout(resolve,20))}}
   await page.goto('http://127.0.0.1:5188/',{waitUntil:'networkidle'});await page.getByRole('button',{name:'进入平台',exact:true}).click()
-  await page.getByRole('menuitem',{name:'共享治理',exact:true}).click();await page.getByRole('menuitem',{name:'共享主体管理',exact:true}).click();await ready()
+  await page.getByRole('menuitem',{name:'系统管理',exact:true}).click();await page.getByRole('menuitem',{name:'共享主体管理',exact:true}).click();await ready()
   assert.match(await page.getByTestId('subject-count').textContent(),new RegExp(initial.length+' 项匹配记录'))
   await page.getByRole('button',{name:'新增主体',exact:true}).click()
   await fill({'业务编码':code,'主体名称':name,'责任单位':'UI_V03_测试责任单位','业务说明':'仅测试登记，不授予数据权限'})

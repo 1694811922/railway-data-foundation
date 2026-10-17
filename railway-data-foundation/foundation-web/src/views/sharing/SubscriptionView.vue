@@ -1,6 +1,7 @@
 <script setup>
 import KafkaConsumptionPanel from '../../components/KafkaConsumptionPanel.vue'
 import ProviderReviewTag from '../../components/ProviderReviewTag.vue'
+const props=defineProps({embedded:Boolean})
 import { session } from '../../utils/sessionState'
 import { allowedActions } from '../../utils/workspace'
 const isDemand=()=>session.user?.role==='DEMAND'
@@ -31,6 +32,7 @@ const visible=ref(false),editing=ref(null),form=reactive({}),formError=ref(''),c
 const actionVisible=ref(false),actionRow=ref(null),actionName=ref(''),reason=ref(''),acknowledged=ref(false),actionError=ref('')
 const drawer=ref(false),detail=ref(null),events=ref([]),detailLoading=ref(false),detailError=ref(''),detailId=ref('')
 const delivery=ref(null),deliveryVisible=ref(false)
+defineExpose({busy:computed(()=>busy.value||deliveryVisible.value)})
 const entryError=ref('')
 const actionLabels={...subscriptionActions,...subscriptionExecutionActions}
 const listGate=subscriptionReadGate(),referenceGate=subscriptionReadGate(),detailGate=subscriptionReadGate(),writeGate=subscriptionReadGate(),entryGate=subscriptionReadGate()
@@ -135,7 +137,7 @@ onBeforeUnmount(()=>{delivery.value=null;[listGate,referenceGate,detailGate,writ
 </script>
 <template>
   <div class="stack">
-    <div class="page-heading"><h1>{{pageTitle}}</h1><div><el-button :disabled="busy||mock" @click="refresh">刷新</el-button><el-button v-if="canApply()" type="primary" :disabled="busy||mock||referenceLoading||!!referenceError||loading||!!error" @click="open()">新增订阅申请</el-button></div></div>
+    <div class="page-heading"><h1 v-if="!embedded">{{pageTitle}}</h1><div><el-button :disabled="busy||mock" @click="refresh">刷新</el-button><el-button v-if="canApply()" type="primary" :disabled="busy||mock||referenceLoading||!!referenceError||loading||!!error" @click="open()">新增订阅申请</el-button></div></div>
     <el-alert v-if="mock" title="订阅审批仅支持真实接口，请关闭演示模式后使用。" type="warning" :closable="false" />
     <el-alert v-if="referenceError" :title="referenceError" type="error" :closable="false" data-testid="subscription-reference-error"><el-button :disabled="busy||referenceLoading" @click="initializeEntry">重试登记选项</el-button></el-alert>
     <el-alert v-if="entryError&&!referenceError" :title="entryError" type="error" :closable="false" data-testid="subscription-entry-error"><el-button :disabled="busy||referenceLoading" @click="initializeEntry">重试申请入口</el-button></el-alert>

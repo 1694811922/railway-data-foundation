@@ -56,7 +56,7 @@ onMounted(load);onBeforeUnmount(()=>{active=false;++readEpoch;++writeEpoch;++det
 </script>
 <template>
   <div class="stack">
-    <div class="page-heading"><div><h1>调用凭据</h1></div><div><el-button :disabled="loading||busy||mock" @click="load">刷新凭据</el-button><el-button type="primary" :disabled="loading||busy||mock||!!error||!!subjectError" @click="open">签发调用凭据</el-button></div></div>
+    <div class="page-heading"><div><h1>{{isDemand()?'我的REST调用凭据':'REST调用凭据'}}</h1></div><div><el-button :disabled="loading||busy||mock" @click="load">刷新凭据</el-button><el-button type="primary" :disabled="loading||busy||mock||!!error||!!subjectError" @click="open">签发调用凭据</el-button></div></div>
 
     <el-alert v-if="mock" title="调用凭据仅支持真实后端，不生成模拟令牌。请关闭演示模式。" type="warning" :closable="false" />
     <div class="panel"><div class="panel-title">凭据目录 </div><el-input v-model="keyword" aria-label="搜索调用凭据" placeholder="搜索名称、需求方或凭据编号" clearable class="search" />

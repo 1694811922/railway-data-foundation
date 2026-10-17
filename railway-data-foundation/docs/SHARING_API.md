@@ -1,5 +1,7 @@
 # 共享关系与访问策略接口
 
+2026-10-17范围修正：接口共享关系的创建、编辑及审批推进只支持REST_API，非REST返回400且不写入部分策略/关系。Kafka请使用独立订阅API；存量非REST记录保留读取、历史、退回/撤回等停止操作，不自动迁移。管理员页面统一为“共享授权→REST接口”，访问策略和调用测试位于授权详情。后端原策略只读API保留。见[入口精简说明](SHARING_GOVERNANCE_SIMPLIFICATION.md)。
+
 ## 提供方确认补充（2026-10-13）
 
 新有归属申请必须“需求方提交 → 提供方确认 → 管理员最终审批”。新增 `provider_review_mode` 和 `provider_confirmed_at`，确认后保持PENDING并增加版本，历史使用真实登录身份。LEGACY存量与ADMIN_MANAGED无归属管理员流程不补造确认。

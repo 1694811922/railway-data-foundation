@@ -170,6 +170,7 @@ public class RelationshipService {
                 (r,n)->List.of(r.getString(1),r.getString(2),r.getString(3),r.getString(4)),capability);
         if(capabilities.isEmpty() || !resource.equals(capabilities.get(0).get(0))) invalid("接口能力不属于所选资源");
         var c=capabilities.get(0);
+        if(!"REST_API".equals(c.get(1))) invalid("接口共享授权仅支持REST接口；Kafka请使用Kafka订阅授权，其他类型暂未支持共享执行");
         if("RETIRED".equals(c.get(2))) invalid("接口能力已退役");
         return new Binding(c.get(1),c.get(2),c.get(3),owner);
     }

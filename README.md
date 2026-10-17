@@ -1,5 +1,7 @@
 # 铁路统一数据底座虚拟接入与共享治理原型系统
 
+2026-10-17：管理员共享治理已收敛为“共享授权（REST接口/Kafka订阅）”和“REST调用凭据”，主体/账号移至系统管理，策略及调用测试位于授权详情。本机已更新，请使用原账号重新登录。253项不同后端、前端194项/build及真实收发回归通过；未提交推送。见[操作说明](railway-data-foundation/docs/SHARING_GOVERNANCE_SIMPLIFICATION.md)。
+
 2026-10-17：资源下架、重新发布和退役已完成，本机服务已更新，重新登录后在资源目录或详情使用。下架保留审批但暂停共享，重新发布需管理员手动恢复。246项不同后端测试、前端190项/build及真实Kafka链路通过。见[使用指南](railway-data-foundation/docs/RESOURCE_LIFECYCLE_GUIDE.md)。未提交推送Git，未部署云端。
 
 2026-10-12：注册前后端已完成。本机打开 http://127.0.0.1:5173/register 自设首任管理员账号和密码；普通注册由管理员核定共享主体后登录。完整167项后端、132项前端及构建、真实浏览器通过。见 [注册使用指南](railway-data-foundation/docs/ROLE_WORKSPACE_GUIDE.md) 和 [交付记录](railway-data-foundation/docs/REGISTRATION_CHANGELOG.md)。未提交推送Git。以下为历史。

@@ -34,7 +34,7 @@ try{
   const page=await browser.newPage({viewport:{width:1800,height:1080},locale:'zh-CN'}),errors=[]
   page.on('pageerror',e=>errors.push(e.message))
   await page.goto(base);await page.getByRole('button',{name:'进入平台',exact:true}).click()
-  await page.getByRole('menuitem',{name:'共享治理',exact:true}).click();await page.getByRole('menuitem',{name:'Kafka 订阅授权',exact:true}).click()
+  await page.getByRole('menuitem',{name:'共享治理',exact:true}).click();await page.getByRole('menuitem',{name:'共享授权',exact:true}).click();await page.getByRole('tab',{name:'Kafka订阅',exact:true}).click()
   const table=()=>page.getByTestId('subscription-table'),edit=()=>page.getByRole('dialog',{name:/新增订阅申请|编辑订阅申请/})
   const ready=async()=>{await page.waitForFunction(()=>!document.querySelector('[data-testid="subscription-table"] .el-loading-mask'));await page.getByRole('button',{name:'新增订阅申请',exact:true}).waitFor();await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='新增订阅申请'&&!b.disabled))}
   const choose=async(label,value)=>{await edit().locator('.el-select').filter({has:page.getByRole('combobox',{name:label,exact:true})}).click();await page.getByRole('option',{name:value,exact:true}).click()}

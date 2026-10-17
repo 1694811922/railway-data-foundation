@@ -1,4 +1,7 @@
 <script setup>
+import {useRoute} from 'vue-router'
+import AccessView from './AccessView.vue'
+const props=defineProps({embedded:Boolean}),route=useRoute()
 import { session } from '../../utils/sessionState'
 import { allowedActions } from '../../utils/workspace'
 const isDemand=()=>session.user?.role==='DEMAND'
@@ -11,11 +14,12 @@ import {resourceApi} from '../../api/resource'
 import {capabilityApi} from '../../api/capability'
 import {fetchDashboardList} from '../../utils/dashboard'
 import {assertSubject} from '../../utils/subject'
-import {actionsFor,assertActionResult,assertRelationship,filterRelationships,relationshipActions,relationshipStatuses,sharingPayload,timeFields,validity} from '../../utils/sharing'
+import {actionsFor,assertActionResult,assertRelationship,filterRelationships,relationshipActions,relationshipStatuses,sharingPayload,timeFields,validity,restCapabilities} from '../../utils/sharing'
 import {displayTime} from '../../utils/time'
 import PolicyDetails from '../../components/PolicyDetails.vue'
 import ProviderReviewTag from '../../components/ProviderReviewTag.vue'
-const roleActions=row=>allowedActions(session.user?.role,actionsFor(row))
+const isLegacyNonRest=row=>{const cap=capabilities.value.find(c=>c.capability_id===row?.capability_id);return !!cap&&cap.type!=='REST_API'}
+const roleActions=row=>allowedActions(session.user?.role,actionsFor(row)).filter(a=>!isLegacyNonRest(row)||['return','revoke','suspend','provider-return'].includes(a))
 const mock=import.meta.env.VITE_USE_MOCK==='true'
 const rows=ref([]),subjects=ref([]),resources=ref([]),capabilities=ref([]),fields=ref([])
 const loading=ref(false),busy=ref(false),error=ref(''),referenceError=ref(''),notice=ref(''),fieldError=ref(''),fieldLoading=ref(false)
@@ -26,11 +30,12 @@ watch(()=>filtered.value.length,()=>{page.value=Math.min(page.value,Math.max(1,M
 const providers=computed(()=>subjects.value.filter(row=>row.subject_type==='PROVIDER'&&row.status==='ENABLED'))
 const demands=computed(()=>subjects.value.filter(row=>row.subject_type==='DEMAND'&&row.status==='ENABLED'))
 const availableResources=computed(()=>resources.value.filter(row=>row.status==='PUBLISHED'))
-const availableCapabilities=computed(()=>capabilities.value.filter(row=>row.resource_id===form.resource_id&&row.status!=='RETIRED'))
+const availableCapabilities=computed(()=>restCapabilities(capabilities.value,form.resource_id))
 const dates=computed(()=>timeFields(fields.value))
 const visible=ref(false),editing=ref(null),form=reactive({}),formError=ref('')
 const actionDialog=ref(false),actionRow=ref(null),actionName=ref(''),actionReason=ref(''),actionError=ref(''),contentAcknowledged=ref(false),actionConflict=ref(false)
-const drawer=ref(false),detail=ref(null),history=ref([]),detailError=ref(''),detailLoading=ref(false)
+const drawer=ref(false),detail=ref(null),history=ref([]),detailError=ref(''),detailLoading=ref(false),testOpen=ref(false)
+defineExpose({busy})
 let active=true,readEpoch=0,fieldEpoch=0,detailEpoch=0,writeEpoch=0
 const safe=e=>e?.response?.data?.message||(!e?.response&&['ECONNABORTED','ERR_NETWORK'].includes(e?.code)?'操作结果未确认，请刷新后检查，不要重复提交':e?.message||'操作失败，请刷新检查')
 async function load(){
@@ -64,7 +69,7 @@ async function loadFields(id){
 }
 function open(row=null){
   if(!canApply())return
-  if(busy.value||loading.value||error.value||referenceError.value||mock)return
+  if(busy.value||loading.value||error.value||referenceError.value||mock||row&&isLegacyNonRest(row))return
   const current=row?structuredClone(toRaw(row)):null
   editing.value=current;formError.value='';fieldError.value='';fields.value=[]
   const now=Date.now()
@@ -102,19 +107,29 @@ async function act(){
     actionDialog.value=false;drawer.value=false;++detailEpoch;ElMessage.success('共享关系状态已更新');await load()
   }catch(e){if(active&&epoch===writeEpoch){actionError.value=safe(e);actionConflict.value=e?.response?.status===409}}finally{if(active&&epoch===writeEpoch)busy.value=false}
 }
-async function showDetail(row){
+async function showDetail(row,openTest=false){
+  testOpen.value=false
   const id=row.relationship_id,epoch=++detailEpoch;drawer.value=true;detail.value=null;history.value=[];detailError.value='';detailLoading.value=true
   try{
     const [current,events]=await Promise.all([sharingApi.get(id),sharingApi.events(id)]);assertRelationship(current,{relationship_id:id})
     if(!Array.isArray(events)||events.some(event=>event.relationship_id!==id||event._demo))throw new Error('状态历史归属不正确')
-    if(active&&epoch===detailEpoch&&drawer.value){detail.value=current;history.value=events}
+    if(active&&epoch===detailEpoch&&drawer.value){detail.value=current;history.value=events;testOpen.value=openTest&&session.user?.role==='ADMIN'&&!isLegacyNonRest(current)}
   }catch(e){if(active&&epoch===detailEpoch)detailError.value=safe(e)}finally{if(active&&epoch===detailEpoch)detailLoading.value=false}
 }
-onMounted(async()=>{await load();const q=new URLSearchParams(location.search);if(isDemand()&&q.get('resource')){open();form.resource_id=q.get('resource');changedResource(form.resource_id);form.capability_id=q.get('capability')||''}});onBeforeUnmount(()=>{active=false;++readEpoch;++fieldEpoch;++detailEpoch;++writeEpoch})
+async function focusEntry(){
+  if(busy.value||loading.value||error.value)return
+  const id=typeof route.query.relationshipId==='string'?route.query.relationshipId:null,policy=typeof route.query.policyId==='string'?route.query.policyId:null
+  const row=id?{relationship_id:id}:policy?rows.value.find(r=>r.policy.policy_id===policy):null
+  if(policy&&!row){notice.value='目标策略不在已读取目录中，请检索对应授权后查看';return}
+  if(row)await showDetail(row,route.query.section==='test')
+}
+watch(()=>[route.query.relationshipId,route.query.policyId,route.query.section],focusEntry)
+watch(drawer,value=>{if(!value)testOpen.value=false})
+onMounted(async()=>{await load();await focusEntry();if(isDemand()&&route.query.resource){open();form.resource_id=route.query.resource;changedResource(form.resource_id);form.capability_id=route.query.capability||''}});onBeforeUnmount(()=>{active=false;testOpen.value=false;++readEpoch;++fieldEpoch;++detailEpoch;++writeEpoch})
 </script>
 <template>
   <div class="stack">
-    <div class="page-heading"><div><h1>共享关系管理</h1></div><div><el-button :disabled="busy||loading||mock" @click="load">刷新列表</el-button><el-button v-if="canApply()" type="primary" :disabled="busy||loading||mock||!!error||!!referenceError" @click="open()">新增共享关系</el-button></div></div>
+    <div class="page-heading"><div><h1 v-if="!embedded">{{isDemand()?'我的共享申请':session.user?.role==='PROVIDER'?'REST共享记录':'REST共享授权'}}</h1></div><div><el-button :disabled="busy||loading||mock" @click="load">刷新列表</el-button><el-button v-if="canApply()" type="primary" :disabled="busy||loading||mock||!!error||!!referenceError" @click="open()">新增共享关系</el-button></div></div>
 
     <el-alert v-if="mock" title="共享关系当前接入真实后端。请设置VITE_USE_MOCK=false并重启前端后使用。" type="warning" :closable="false" />
     <div class="panel"><div class="panel-title">确认流程</div><div class="workflow"><span>需求方提交</span><b>→</b><span>提供方确认</span><b>→</b><span>管理员审批</span><b>→</b><span>启用登记</span></div></div>
@@ -124,7 +139,7 @@ onMounted(async()=>{await load();const q=new URLSearchParams(location.search);if
       <el-table :data="paged" v-loading="loading" data-testid="relationship-table" empty-text="暂无共享关系，请先登记双方主体、发布资源并登记能力">
         <el-table-column prop="relationship_name" label="关系名称" min-width="170" show-overflow-tooltip /><el-table-column prop="provider_name" label="提供方" min-width="140" show-overflow-tooltip /><el-table-column prop="demand_name" label="需求方" min-width="140" show-overflow-tooltip /><el-table-column prop="resource_name" label="数据资源" min-width="180" show-overflow-tooltip /><el-table-column prop="capability_name" label="接口能力" min-width="160" show-overflow-tooltip />
         <el-table-column label="提供方确认" width="140"><template #default="{row}"><ProviderReviewTag :row="row" /></template></el-table-column><el-table-column label="状态" width="115"><template #default="{row}"><el-tag :type="row.status==='ACTIVE'?'success':row.status==='REVOKED'?'info':'warning'">{{relationshipStatuses[row.status]}}</el-tag></template></el-table-column><el-table-column label="授权有效期" min-width="130"><template #default="{row}">{{validity(row)}}</template></el-table-column><el-table-column prop="version" label="版本" width="70" />
-        <el-table-column label="操作" min-width="240" fixed="right"><template #default="{row}"><el-button link type="primary" :disabled="busy" @click="showDetail(row)">查看</el-button><el-button v-if="canApply() && row.status==='DRAFT'" link type="primary" :disabled="busy||!!referenceError" @click="open(row)">编辑</el-button><el-dropdown v-if="roleActions(row).length" :disabled="busy||!roleActions(row).length" @command="action=>openAction(row,action)"><el-button link type="primary" :disabled="busy||!roleActions(row).length">{{session.user?.role==='PROVIDER'?'内容确认':'状态操作'}}</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item v-for="action in roleActions(row)" :key="action" :command="action">{{relationshipActions[action]}}</el-dropdown-item></el-dropdown-menu></template></el-dropdown></template></el-table-column>
+        <el-table-column label="操作" min-width="240" fixed="right"><template #default="{row}"><el-button link type="primary" :disabled="busy" @click="showDetail(row)">查看</el-button><el-button v-if="canApply() && row.status==='DRAFT' && !isLegacyNonRest(row)" link type="primary" :disabled="busy||!!referenceError" @click="open(row)">编辑</el-button><el-dropdown v-if="roleActions(row).length" :disabled="busy||!roleActions(row).length" @command="action=>openAction(row,action)"><el-button link type="primary" :disabled="busy||!roleActions(row).length">{{session.user?.role==='PROVIDER'?'内容确认':'状态操作'}}</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item v-for="action in roleActions(row)" :key="action" :command="action">{{relationshipActions[action]}}</el-dropdown-item></el-dropdown-menu></template></el-dropdown></template></el-table-column>
       </el-table><el-pagination v-model:current-page="page" v-model:page-size="size" :total="filtered.length" :page-sizes="[10,20,50]" layout="total, sizes, prev, pager, next" />
     </div>
     <el-dialog :model-value="visible" :title="editing?'编辑共享关系':'新增共享关系'" width="860px" :close-on-click-modal="false" :close-on-press-escape="!busy" :show-close="!busy" :before-close="close" @update:model-value="v=>{if(!v)close()}">
@@ -146,9 +161,10 @@ onMounted(async()=>{await load();const q=new URLSearchParams(location.search);if
       <template v-if="actionName.startsWith('provider-')"><el-descriptions :column="1" border><el-descriptions-item label="需求方">{{actionRow?.demand_name}}</el-descriptions-item><el-descriptions-item label="资源 / 能力">{{actionRow?.resource_name}} / {{actionRow?.capability_name}}</el-descriptions-item><el-descriptions-item label="使用目的">{{actionRow?.purpose}}</el-descriptions-item><el-descriptions-item label="授权有效期">{{displayTime(actionRow?.valid_from)}} 至 {{displayTime(actionRow?.valid_until)}}</el-descriptions-item></el-descriptions><PolicyDetails :policy="actionRow.policy" /><el-checkbox v-if="actionName==='provider-confirm'" v-model="contentAcknowledged" aria-label="提供方确认共享内容" :disabled="busy">我已核对用途、有效期、允许字段和数据时间范围</el-checkbox></template>
       <el-alert v-if="actionError" :title="actionError" type="error" :closable="false" data-testid="relationship-action-error" /><el-input v-model="actionReason" aria-label="状态操作原因" type="textarea" :rows="3" maxlength="1000" placeholder="填写原因，确认后写入操作历史" :disabled="busy" /><template #footer><el-button :disabled="busy" @click="actionDialog=false">取消</el-button><el-button type="primary" :loading="busy" :disabled="actionConflict" @click="act">确认操作</el-button></template>
     </el-dialog>
-    <el-drawer v-model="drawer" title="共享关系详情" size="780px" @update:model-value="value=>{if(!value)++detailEpoch}">
-      <div v-loading="detailLoading" class="stack"><el-alert v-if="detailError" :title="detailError" type="error" :closable="false" /><template v-if="detail"><el-descriptions :column="1" :label-width="130" border><el-descriptions-item label="关系名称">{{detail.relationship_name}}</el-descriptions-item><el-descriptions-item label="关系编号">{{detail.relationship_id}}</el-descriptions-item><el-descriptions-item label="双方主体">{{detail.provider_name}} → {{detail.demand_name}}</el-descriptions-item><el-descriptions-item label="资源 / 能力">{{detail.resource_name}} / {{detail.capability_name}}</el-descriptions-item><el-descriptions-item label="使用目的">{{detail.purpose}}</el-descriptions-item><el-descriptions-item label="状态与版本">{{relationshipStatuses[detail.status]}} · 版本 {{detail.version}}</el-descriptions-item><el-descriptions-item label="授权有效期">{{displayTime(detail.valid_from)}} 至 {{displayTime(detail.valid_until)}}（{{validity(detail)}}）</el-descriptions-item></el-descriptions><el-descriptions :column="2" border><el-descriptions-item label="提供方确认"><ProviderReviewTag :row="detail" /></el-descriptions-item><el-descriptions-item label="提供方确认时间">{{displayTime(detail.provider_confirmed_at)}}</el-descriptions-item></el-descriptions><h3>访问策略</h3><PolicyDetails :policy="detail.policy" /><h3>操作历史</h3><el-table :data="history" data-testid="relationship-history"><el-table-column label="操作" width="115"><template #default="{row}">{{relationshipActions[row.action.toLowerCase()]||{CREATE:'登记',UPDATE:'编辑',PROVIDER_CONFIRM:'提供方确认',PROVIDER_RETURN:'提供方退回',RESOURCE_UNPUBLISH:'资源下架停止共享',RESOURCE_RETIRE:'资源退役终止共享'}[row.action]}}</template></el-table-column><el-table-column prop="operator_name" label="操作者" width="120" /><el-table-column prop="reason" label="原因" min-width="180" /><el-table-column prop="version" label="版本" width="70" /><el-table-column label="时间" min-width="180"><template #default="{row}">{{displayTime(row.occurred_at)}}</template></el-table-column></el-table></template></div>
+    <el-drawer v-model="drawer" title="接口共享授权详情" size="780px" @update:model-value="value=>{if(!value)++detailEpoch}">
+      <div v-loading="detailLoading" class="stack"><el-alert v-if="detailError" :title="detailError" type="error" :closable="false" /><template v-if="detail"><el-descriptions :column="1" :label-width="130" border><el-descriptions-item label="关系名称">{{detail.relationship_name}}</el-descriptions-item><el-descriptions-item label="关系编号">{{detail.relationship_id}}</el-descriptions-item><el-descriptions-item label="双方主体">{{detail.provider_name}} → {{detail.demand_name}}</el-descriptions-item><el-descriptions-item label="资源 / 能力">{{detail.resource_name}} / {{detail.capability_name}}</el-descriptions-item><el-descriptions-item label="使用目的">{{detail.purpose}}</el-descriptions-item><el-descriptions-item label="状态与版本">{{relationshipStatuses[detail.status]}} · 版本 {{detail.version}}</el-descriptions-item><el-descriptions-item label="授权有效期">{{displayTime(detail.valid_from)}} 至 {{displayTime(detail.valid_until)}}（{{validity(detail)}}）</el-descriptions-item></el-descriptions><el-descriptions :column="2" border><el-descriptions-item label="提供方确认"><ProviderReviewTag :row="detail" /></el-descriptions-item><el-descriptions-item label="提供方确认时间">{{displayTime(detail.provider_confirmed_at)}}</el-descriptions-item></el-descriptions><el-alert v-if="isLegacyNonRest(detail)" title="历史非REST记录仅保留查看和终止操作；Kafka权限请通过Kafka订阅授权管理。" type="warning" :closable="false" /><h3>访问策略</h3><PolicyDetails :policy="detail.policy" /><el-button v-if="session.user?.role==='ADMIN'&&!isLegacyNonRest(detail)" :disabled="!!referenceError" @click="testOpen=true">调用测试</el-button><h3>操作历史</h3><el-table :data="history" data-testid="relationship-history"><el-table-column label="操作" width="115"><template #default="{row}">{{relationshipActions[row.action.toLowerCase()]||{CREATE:'登记',UPDATE:'编辑',PROVIDER_CONFIRM:'提供方确认',PROVIDER_RETURN:'提供方退回',RESOURCE_UNPUBLISH:'资源下架停止共享',RESOURCE_RETIRE:'资源退役终止共享'}[row.action]}}</template></el-table-column><el-table-column prop="operator_name" label="操作者" width="120" /><el-table-column prop="reason" label="原因" min-width="180" /><el-table-column prop="version" label="版本" width="70" /><el-table-column label="时间" min-width="180"><template #default="{row}">{{displayTime(row.occurred_at)}}</template></el-table-column></el-table></template></div>
     </el-drawer>
+    <el-dialog v-model="testOpen" title="接口共享调用测试" width="min(1280px,96vw)" destroy-on-close><AccessView v-if="testOpen&&drawer&&detail&&session.user?.role==='ADMIN'" :key="detail.relationship_id" :relationship-id="detail.relationship_id" embedded /></el-dialog>
   </div>
 </template>
 <style scoped>

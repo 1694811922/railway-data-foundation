@@ -20,7 +20,7 @@ try{
  const base='http://127.0.0.1:'+server.httpServer.address().port
  await page.goto(base+'/',{waitUntil:'networkidle'});await page.getByRole('textbox',{name:'登录账号',exact:true}).fill(process.env.KAFKA_LIVE_WORKSPACE_USER);await page.getByRole('textbox',{name:'登录密码',exact:true}).fill(process.env.KAFKA_LIVE_WORKSPACE_PASSWORD);await page.getByRole('button',{name:'进入平台',exact:true}).click();await page.waitForURL('**/dashboard');const csrf=(await (await page.request.get(base+'/api/v1/auth/csrf')).json()).data;await page.context().setExtraHTTPHeaders({[csrf.header_name]:csrf.token})
  await page.goto(base+'/kafka-subscriptions?keyword='+config.grant_id,{waitUntil:'networkidle'})
- await page.getByRole('heading',{name:'Kafka 订阅授权',exact:true}).waitFor()
+ await page.getByRole('heading',{name:'共享授权',exact:true}).waitFor()
  const row=page.getByTestId('subscription-table').getByRole('row').filter({hasText:config.grant_name})
  await row.getByText('未配置权限',{exact:true}).waitFor()
  async function action(label){

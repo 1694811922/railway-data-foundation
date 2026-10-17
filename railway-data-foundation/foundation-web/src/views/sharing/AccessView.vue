@@ -10,6 +10,7 @@ import {detailRows} from '../../utils/resourceDetail'
 import {callerToken,invocationParams,providerRows} from '../../utils/access'
 import PolicyDetails from '../../components/PolicyDetails.vue'
 const route=useRoute(),mock=import.meta.env.VITE_USE_MOCK==='true'
+const props=defineProps({relationshipId:String,embedded:Boolean})
 const relationships=ref([]),selection=ref(''),relationship=ref(null),fields=ref([])
 const loading=ref(false),scopeLoading=ref(false),busy=ref(false),error=ref(''),scopeError=ref(''),notice=ref('')
 const token=ref(''),result=ref(null),rows=ref([]),columns=ref([])
@@ -20,6 +21,7 @@ function clearResult(){result.value=null;rows.value=[];columns.value=[];++callEp
 async function load(){
   if(mock||busy.value)return
   const epoch=++listEpoch;++scopeEpoch;clearResult();loading.value=true;scopeLoading.value=false;relationships.value=[];relationship.value=null;fields.value=[];error.value='';scopeError.value='';notice.value=''
+  if(props.relationshipId){loading.value=false;token.value='';if(selection.value===props.relationshipId)await loadScope(props.relationshipId);else selection.value=props.relationshipId;return}
   try{
     const data=await fetchDashboardList(sharingApi.list,'relationship_id');data.rows.forEach(row=>assertRelationship(row))
     if(!active||epoch!==listEpoch)return
@@ -44,7 +46,8 @@ async function loadScope(id){
 }
 watch(selection,id=>{token.value='';loadScope(id)})
 watch([token,form],()=>clearResult(),{deep:true})
-watch(()=>route.query.relationshipId,id=>{if(!busy.value&&typeof id==='string')selection.value=id})
+watch(()=>props.relationshipId,()=>{token.value='';load()})
+watch(()=>route.query.relationshipId,id=>{if(!props.embedded&&!busy.value&&typeof id==='string')selection.value=id})
 async function invoke(){
   if(busy.value||loading.value||scopeLoading.value||!relationship.value||scopeError.value||mock)return
   clearResult()
@@ -72,7 +75,7 @@ onBeforeUnmount(()=>{active=false;++listEpoch;++scopeEpoch;++callEpoch;token.val
 </script>
 <template>
   <div class="stack">
-    <div class="page-heading"><div><h1>共享调用验证</h1></div><el-button :disabled="loading||scopeLoading||busy||mock" @click="load">刷新关系</el-button></div>
+    <div class="page-heading"><div><h1 v-if="!embedded">共享调用验证</h1><strong v-else>当前授权调用测试</strong></div><el-button :disabled="loading||scopeLoading||busy||mock" @click="load">刷新授权</el-button></div>
 
     <el-alert v-if="mock" title="共享调用验证仅支持真实后端，演示模式不会发送查询或生成授权结果。" type="warning" :closable="false" />
     <el-alert v-if="error" :title="error" type="error" :closable="false" data-testid="access-list-error" />
@@ -81,7 +84,7 @@ onBeforeUnmount(()=>{active=false;++listEpoch;++scopeEpoch;++callEpoch;token.val
       <div class="panel" v-loading="loading||scopeLoading">
         <div class="panel-title">共享请求</div>
         <el-form label-position="top" :disabled="busy||loading||scopeLoading||mock">
-          <el-form-item label="共享关系" required><el-select v-model="selection" filterable placeholder="选择要验证的共享关系" aria-label="选择共享关系"><el-option v-for="row in relationships" :key="row.relationship_id" :value="row.relationship_id" :label="`${row.relationship_name} · ${relationshipStatuses[row.status]}`" /></el-select></el-form-item>
+          <el-form-item v-if="!embedded" label="共享关系" required><el-select v-model="selection" filterable placeholder="选择要验证的共享关系" aria-label="选择共享关系"><el-option v-for="row in relationships" :key="row.relationship_id" :value="row.relationship_id" :label="`${row.relationship_name} · ${relationshipStatuses[row.status]}`" /></el-select></el-form-item>
           <el-alert v-if="scopeError" :title="scopeError" type="error" :closable="false" data-testid="access-scope-error" />
           <el-form-item label="需求方调用令牌" required><el-input v-model="token" type="password" show-password autocomplete="off" placeholder="填写签发时获取的调用令牌" aria-label="需求方调用令牌" /></el-form-item>
           <el-form-item label="请求字段"><el-select v-model="form.fields" multiple filterable placeholder="不选择时按策略允许字段返回" aria-label="请求字段"><el-option v-for="field in fields" :key="field.field_name" :value="field.field_name" :label="`${field.business_name||field.field_name}（${field.field_name}）`" /></el-select></el-form-item>

@@ -464,6 +464,7 @@ class KafkaFoundationLiveTest {
         try(var client=consumer(oldDelivery,topic,oldDelivery.path("consumer_group").asText())){expectDenied(client);}
         workspaceLogin(workspaceDemandName,workspaceDemandPassword);String taskPath="/receiving-tasks/"+receiverTask;JsonNode task=null;long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(15);
         while(System.nanoTime()<until){task=received(taskPath,"GET",null);if(task.path("runtime_state").asText().equals("BLOCKED"))break;Thread.sleep(200);}assertThat(task.path("runtime_state").asText()).isEqualTo("BLOCKED");assertThat(task.path("received_count").asInt()).isEqualTo(simulatedMessages+3);
+        receivingHistoryBrowser(); // Revoked technical token must not log the user out of the progress dialog.
         lifecycleBrowser("republish");workspaceLogin();grant=current(grant);assertThat(grant.path("execution_state").asText()).isEqualTo("REVOKED");assertThat(externalRest(HttpClient.newHttpClient()).statusCode()).isEqualTo(403);
         var rest=data("/relationships/"+restRelationship,"GET",null);assertThat(rest.path("status").asText()).isEqualTo("SUSPENDED");data("/relationships/"+restRelationship+"/enable","POST",Map.of("version",rest.path("version").asInt(),"reason","资源重新发布后管理员手动恢复"));assertThat(externalRest(HttpClient.newHttpClient()).statusCode()).isEqualTo(200);
         grant=subscriptionAction(grant,"provision");assertThat(grant.path("broker_username").asText()).isNotEqualTo(oldDelivery.path("grant").path("broker_username").asText());
@@ -566,6 +567,10 @@ class KafkaFoundationLiveTest {
         assertThat(events.toString()).doesNotContain(receiverMonitorToken,"message_value","encrypted_secrets","container_no");
         var config=evidence.resolve("monitor-browser-context.json");Files.writeString(config,json.writeValueAsString(Map.of("foundation",foundation,"task_id",receiverTask,"evidence",evidence.toString())));
         var b=new ProcessBuilder(env("KAFKA_LIVE_NODE"),project.resolve("foundation-web/scripts/monitor-admin-live.mjs").toString(),config.toString()).directory(project.resolve("foundation-web").toFile());b.environment().clear();b.environment().putAll(baseEnv());b.environment().put("KAFKA_LIVE_WORKSPACE_USER",workspaceName);b.environment().put("KAFKA_LIVE_WORKSPACE_PASSWORD",workspacePassword);b.redirectErrorStream(true);b.redirectOutput(evidence.resolve("monitor-browser.log").toFile());browserProcess=b.start();assertThat(browserProcess.waitFor(90,TimeUnit.SECONDS)).isTrue();assertThat(browserProcess.exitValue()).as("Administrator technical receiver monitor").isZero();
+    }
+    void governanceBrowser()throws Exception{
+        var config=evidence.resolve("governance-context.json");Files.writeString(config,json.writeValueAsString(Map.of("foundation",foundation,"provider",provider,"relationship_id",restRelationship,"kafka_capability_id",capabilityId,"evidence",evidence.toString())));
+        var b=new ProcessBuilder(env("KAFKA_LIVE_NODE"),project.resolve("foundation-web/scripts/governance-live.mjs").toString(),config.toString()).directory(project.resolve("foundation-web").toFile());b.environment().clear();b.environment().putAll(baseEnv());b.environment().put("GOVERNANCE_USER",workspaceName);b.environment().put("GOVERNANCE_PASSWORD",workspacePassword);b.environment().put("GOVERNANCE_CALLER_TOKEN",restToken);b.redirectErrorStream(true);b.redirectOutput(evidence.resolve("governance-browser.log").toFile());browserProcess=b.start();assertThat(browserProcess.waitFor(90,TimeUnit.SECONDS)).isTrue();assertThat(browserProcess.exitValue()).as("Consolidated governance real browser").isZero();
     }
     void receivingHistoryBrowser()throws Exception{
         var config=evidence.resolve("receiver-browser-context.json");
@@ -697,7 +702,7 @@ class KafkaFoundationLiveTest {
             assertThat(data("/resources/"+resourceId,"GET",null)).isEqualTo(resourceBefore);assertThat(data("/resources/"+resourceId+"/fields","GET",null)).isEqualTo(fieldsBefore);
             simulateRemaining(result.path("published"));subscriptions();
             assertThat(data("/resources/"+resourceId,"GET",null)).isEqualTo(resourceBefore);assertThat(data("/resources/"+resourceId+"/fields","GET",null)).isEqualTo(fieldsBefore);
-            restRegression();ownedProviderConfirmation();
+            restRegression();governanceBrowser();ownedProviderConfirmation();
             stop(foundationProcess);
             assertThat(externalRest(HttpClient.newHttpClient()).statusCode()).isEqualTo(503);
             var unavailable=response(provider+"/containers/events/1/publish","POST",null,Map.of("X-Provider-Token",control,"X-Capability-Id",capabilityId));

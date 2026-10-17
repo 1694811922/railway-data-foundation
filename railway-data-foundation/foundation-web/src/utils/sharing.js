@@ -5,6 +5,7 @@ const transitions={DRAFT:['submit','revoke'],PENDING:['confirm','return','revoke
 export const actionsFor=row=>[...(transitions[row?.status]||[]).filter(action=>action!=='confirm'||providerReady(row)),...providerActionsFor(row)]
 export const actionTarget={submit:'PENDING',confirm:'CONFIRMED',return:'DRAFT',enable:'ACTIVE',suspend:'SUSPENDED',revoke:'REVOKED','provider-confirm':'PENDING','provider-return':'DRAFT'}
 export const timeFields=rows=>rows.filter(row=>row.time_field===true && /^(datetime|timestamp|date)(\(.*\))?$/i.test(row.data_type))
+export const restCapabilities=(rows,resourceId)=>rows.filter(row=>row.resource_id===resourceId&&row.type==='REST_API'&&row.status!=='RETIRED')
 export function iso(value) {
   if(!value)throw new Error('请选择完整时间范围')
   const date=new Date(value)

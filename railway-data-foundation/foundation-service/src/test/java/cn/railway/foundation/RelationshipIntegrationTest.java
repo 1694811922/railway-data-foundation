@@ -137,6 +137,18 @@ class RelationshipIntegrationTest extends AuthenticatedApiTest {
         assertThat(http.getForEntity("/api/v1/relationships?limit=201",JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(http.getForEntity("/api/v1/relationships/missing",JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         db.update("UPDATE capability SET type='KAFKA_TOPIC' WHERE capability_id=?",capability);
-        row=transition(row,"submit","PENDING");row=transition(row,"confirm","CONFIRMED");assertThat(action(id,"enable",3).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(action(id,"submit",1).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(http.getForEntity("/api/v1/relationships/"+id,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+        transition(row,"revoke","REVOKED"); // Historical non-REST records remain readable and terminable.
+    }
+    @Test void nonRestApplicationsAreRejectedBeforeCreatingPolicyOrRelationship(){
+        int before=db.queryForObject("SELECT COUNT(*) FROM access_policy",Integer.class);
+        for(String type:List.of("KAFKA_TOPIC","CDC_STREAM","READONLY_QUERY")){
+            db.update("UPDATE capability SET type=? WHERE capability_id=?",type,capability);
+            var response=http.postForEntity("/api/v1/relationships",body(),JsonNode.class);
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);assertThat(response.getBody().path("message").asText()).contains("仅支持REST");
+        }
+        assertThat(db.queryForObject("SELECT COUNT(*) FROM access_policy",Integer.class)).isEqualTo(before);
+        assertThat(db.queryForObject("SELECT COUNT(*) FROM sharing_relationship WHERE resource_id=?",Integer.class,resource)).isZero();
     }
 }

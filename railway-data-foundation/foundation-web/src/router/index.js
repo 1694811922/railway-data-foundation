@@ -4,6 +4,7 @@ import { restoreSession } from '../api/auth'
 import { session } from '../utils/sessionState'
 import { allowedRoute } from '../utils/workspace'
 import { publicAuthRoute } from '../utils/registration'
+import {authorizationRedirect} from '../utils/authorizationNavigation'
 
 const routes = [
   { path: '/login', component: () => import('../views/LoginView.vue') },
@@ -17,6 +18,7 @@ const routes = [
     { path: 'resources/:id', component: () => import('../views/resource/WorkspaceResourceDetail.vue'), meta: { title: '资源详情' } },
     { path: 'capabilities', component: () => import('../views/capability/CapabilityView.vue'), meta: { title: '接口能力' } },
     { path: 'accounts', component: () => import('../views/subject/AccountView.vue'), meta: { title: '用户账号' } },
+    { path: 'sharing-authorizations', component: () => import('../views/sharing/AuthorizationView.vue'), meta: { title: '共享授权' } },
     { path: 'subjects', component: () => import('../views/subject/SubjectView.vue'), meta: { title: '共享主体管理' } },
     { path: 'relationships', component: () => import('../views/sharing/RelationshipView.vue'), meta: { title: '共享关系管理' } },
     { path: 'kafka-subscriptions', component: () => import('../views/sharing/SubscriptionView.vue'), meta: { title: 'Kafka 订阅授权' } },
@@ -38,6 +40,8 @@ const router = createRouter({ history: createWebHistory(), routes })
 router.beforeEach(async(to)=>{
   try { await restoreSession() } catch { return publicAuthRoute(to.path)?true:'/login' }
   if(!session.user && !publicAuthRoute(to.path))return '/login'
+  const sharingRedirect=authorizationRedirect(session.user?.role,to.path,to.query)
+  if(sharingRedirect)return sharingRedirect
   if(session.user?.role==='ADMIN'&&['/runtime-events','/runtime-traces','/metrics','/kafka-monitor'].some(p=>to.path===p||to.path.startsWith(p+'/'))){
     const query={...to.query};if(to.path==='/kafka-monitor')query.method='KAFKA';if(to.path.startsWith('/runtime-traces/')&&to.params.id)query.traceId=to.params.id
     return {path:'/transfer-monitor',query,replace:true}
