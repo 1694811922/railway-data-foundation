@@ -73,6 +73,7 @@ public class ResourceService {
     public Resource update(String id,ResourceRequest request) {
         lockResource(id);
         var current=get(id);
+        if("RETIRED".equals(current.status()))throw new BusinessException(ErrorCode.BUSINESS_ERROR,"已退役资源只读，不能修改");
         requireVersion(request.version(),current.version());
         if (!current.sourceId().equals(request.sourceId()) || !current.schemaName().equals(request.schemaName())
                 || !current.physicalTable().equals(request.physicalTable())
@@ -84,14 +85,6 @@ public class ResourceService {
         if (changed!=1) throw conflict();
         return capture(id,"RESOURCE_UPDATE",null);
     }
-    @Transactional
-    public Resource publish(String id) {
-        lockResource(id);
-        var current=get(id);
-        if (!"DRAFT".equals(current.status())) throw new BusinessException(ErrorCode.BUSINESS_ERROR,"仅草稿资源可以发布");
-        db.update("UPDATE data_resource SET status='PUBLISHED',version=version+1,updated_at=? WHERE resource_id=? AND status='DRAFT'",now(),id);
-        return capture(id,"PUBLISH",null);
-    }
     public List<Field> fields(String id) {
         get(id);
         // A single read returns field attributes and their parent version from the same database snapshot.
@@ -101,6 +94,7 @@ public class ResourceService {
     public Field updateField(String id,String fieldName,FieldUpdateRequest request) {
         lockResource(id);
         var current=get(id);
+        if("RETIRED".equals(current.status()))throw new BusinessException(ErrorCode.BUSINESS_ERROR,"已退役资源只读，不能修改");
         requireVersion(request.resourceVersion(),current.version());
         String sensitivity=request.sensitivityLevel()==null?"":request.sensitivityLevel();
         int changed=db.update("UPDATE resource_field SET business_name=?,business_description=?,time_field=?,sensitivity_level=? WHERE resource_id=? AND field_name=?",
@@ -113,11 +107,12 @@ public class ResourceService {
         return db.query("SELECT f.*,r.version AS resource_version FROM resource_field f JOIN data_resource r ON r.resource_id=f.resource_id WHERE f.resource_id=? AND f.field_name=?",(rs,n)->fieldRow(rs),id,fieldName).get(0);
     }
     @Transactional
-    public void delete(String id) {
+    public void delete(String id,int version) {
         lockResource(id);
         var current=get(id);
+        requireVersion(version,current.version());
         if (!"DRAFT".equals(current.status()))
-            throw new BusinessException(ErrorCode.BUSINESS_ERROR,"仅草稿资源可以删除；已发布资源应保留历史并在后续使用退役功能");
+            throw new BusinessException(ErrorCode.BUSINESS_ERROR,"仅草稿资源可以删除；已发布资源须先下架再退役，保留历史");
         Integer capabilities=db.queryForObject("SELECT COUNT(*) FROM capability WHERE resource_id=?",Integer.class,id);
         if (capabilities!=null && capabilities>0)
             throw new BusinessException(ErrorCode.BUSINESS_ERROR,"资源已登记接口能力，请先处理关联能力");

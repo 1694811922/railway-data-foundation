@@ -45,9 +45,11 @@ public class ConsumptionService {
         db.update("UPDATE kafka_subscription_execution SET consumption_token_digest=? WHERE grant_id=?",digest(token),id);
         return token;
     }
-    @Transactional
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Receipt accept(String id,String authorization,ConsumptionReportRequest request){
         // Lock the same parent as claim/stop/revoke: no report may race through a committed stop request.
+        verifyCredential(id,authorization);
+        cn.railway.foundation.resource.ResourceLocks.child(db,"kafka_subscription_grant",id);
         var locks=db.query("SELECT grant_id FROM kafka_subscription_grant WHERE grant_id=? FOR UPDATE",(r,n)->r.getString(1),id);
         if(locks.isEmpty())unauthorized();
         String token=authorization!=null&&authorization.startsWith("Bearer ")?authorization.substring(7):"";

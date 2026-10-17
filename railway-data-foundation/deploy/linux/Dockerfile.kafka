@@ -1,0 +1,16 @@
+FROM maven:3.9-eclipse-temurin-17 AS build
+WORKDIR /build
+COPY pom.xml ./pom.xml
+COPY examples/local-kafka/pom.xml examples/local-kafka/pom.xml
+RUN mvn -B -ntp -f examples/local-kafka/pom.xml org.apache.maven.plugins:maven-dependency-plugin:3.9.0:copy-dependencies -DincludeScope=runtime -DoutputDirectory=/runtime/libs
+COPY scripts/java/LocalKafka.java /runtime/LocalKafka.java
+RUN javac --release 17 -encoding UTF-8 -cp '/runtime/libs/*' -d /runtime/classes /runtime/LocalKafka.java
+
+FROM eclipse-temurin:17-jre-jammy
+WORKDIR /var/lib/railway/kafka
+COPY --from=build /runtime /opt/kafka
+COPY scripts/java/kafka-logback.xml /opt/kafka/logback.xml
+COPY deploy/linux/kafka-entrypoint.sh /opt/kafka/entrypoint.sh
+RUN chmod 0555 /opt/kafka/entrypoint.sh
+USER 10001:10001
+ENTRYPOINT ["/opt/kafka/entrypoint.sh"]

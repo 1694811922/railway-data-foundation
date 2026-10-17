@@ -45,3 +45,10 @@ test('resource validation requires scanned origin and manual business informatio
   assert.match(resourceError({code:'ECONNABORTED'},'保存资源'),/结果尚未确认/)
   assert.equal(resourceError({response:{data:{message:'该表已登记'}}},'保存资源'),'该表已登记')
 })
+test('演示生命周期原因独立留存，不补造旧历史',()=>{
+  storage.clear()
+  demoStore.put('resources',{...demoSeed.resources[0],status:'OFFLINE',version:2},'resource_id',{action:'UNPUBLISH',reason:'演示下架'})
+  const history=demoStore.resourceVersions('RES_000001')
+  assert.equal(history.items[0].action,'UNPUBLISH');assert.equal(history.items[0].operation_reason,'演示下架');assert.equal(history.items[0].operator_name,'演示管理员')
+  assert.equal(history.items[1].operation_reason,'');assert.equal(history.items[1].operator_name,'')
+})

@@ -11,8 +11,8 @@ import java.util.*;
 @Service
 public class ReceivingService {
     static final String PUBLIC="task_id,grant_id,subject_id,task_name,start_position,desired_state,runtime_state,error_reason,version,last_received_at,created_at,updated_at,JSON_UNQUOTE(JSON_EXTRACT(context_json,'$.grant.topic')) topic,JSON_UNQUOTE(JSON_EXTRACT(context_json,'$.grant.resource_name')) resource_name,JSON_UNQUOTE(JSON_EXTRACT(context_json,'$.grant.grant_name')) grant_name";
-    private final JdbcTemplate db;private final FoundationClient foundation;private final SecretVault vault;private final KafkaConnections kafka;private final ObjectMapper json;private final TransactionTemplate tx;
-    public ReceivingService(JdbcTemplate db,FoundationClient foundation,SecretVault vault,KafkaConnections kafka,ObjectMapper json,PlatformTransactionManager manager){this.db=db;this.foundation=foundation;this.vault=vault;this.kafka=kafka;this.json=json;tx=new TransactionTemplate(manager);}
+    private final JdbcTemplate db;private final FoundationClient foundation;private final SecretVault vault;private final KafkaConnections kafka;private final ObjectMapper json;private final TransactionTemplate tx;private final TransferLogs logs;
+    public ReceivingService(JdbcTemplate db,FoundationClient foundation,SecretVault vault,KafkaConnections kafka,ObjectMapper json,PlatformTransactionManager manager,TransferLogs logs){this.db=db;this.foundation=foundation;this.vault=vault;this.kafka=kafka;this.json=json;this.logs=logs;tx=new TransactionTemplate(manager);}
     public Map<String,Object> get(String id,String subject){var rows=db.queryForList("SELECT "+PUBLIC+",(SELECT COUNT(*) FROM received_message m WHERE m.task_id=t.task_id) received_count,(SELECT COUNT(*) FROM receiving_outbox o WHERE o.task_id=t.task_id AND o.report_state='PENDING') pending_reports FROM receiving_task t WHERE task_id=? AND subject_id=?",id,subject);if(rows.isEmpty())throw new ReceiverFailure(403,"无权访问该接收任务");return rows.get(0);}
     @org.springframework.transaction.annotation.Transactional(readOnly=true,isolation=org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
     public Map<String,Object> page(String subject,String keyword,String grantId,int limit,int offset){
@@ -28,11 +28,14 @@ public class ReceivingService {
         if(!user.path("subject_id").asText().equals(ctx.path("grant").path("demand_subject_id").asText()))throw new ReceiverFailure(403,"不能接收其他主体的数据");
         kafka.verify(ctx,body.password());String actualIdentity=kafka.identity(ctx,body.password());String id="RCV_"+UUID.randomUUID().toString().replace("-","");
         String sealed=vault.seal(id,stringify(Map.of("password",body.password(),"token",body.consumptionToken())));
-        try{db.update("INSERT INTO receiving_task(task_id,grant_id,subject_id,created_by,task_name,context_json,encrypted_secrets,start_position,topic_identity) VALUES(?,?,?,?,?,?,?,?,?)",id,body.grantId(),user.path("subject_id").asText(),user.path("user_id").asText(),body.taskName().trim(),stringify(ctx),sealed,body.startPosition(),actualIdentity);}
+        try{tx.executeWithoutResult(s->{db.update("INSERT INTO receiving_task(task_id,grant_id,subject_id,created_by,task_name,context_json,encrypted_secrets,start_position,topic_identity) VALUES(?,?,?,?,?,?,?,?,?)",id,body.grantId(),user.path("subject_id").asText(),user.path("user_id").asText(),body.taskName().trim(),stringify(ctx),sealed,body.startPosition(),actualIdentity);logs.event(id,"CREATED","INFO","TASK_CREATED",user.path("user_id").asText());});}
         catch(org.springframework.dao.DuplicateKeyException e){throw new ReceiverFailure(409,"该授权已有接收任务，请打开已有任务");}
         return get(id,user.path("subject_id").asText());
     }
     public Map<String,Object> action(String id,String subject,String action,int version){
+        return action(id,subject,action,version,null);
+    }
+    public Map<String,Object> action(String id,String subject,String action,int version,String operator){
         tx.executeWithoutResult(s->{
             get(id,subject);var row=db.queryForMap("SELECT * FROM receiving_task WHERE task_id=? FOR UPDATE",id);
             if(((Number)row.get("version")).intValue()!=version)throw new ReceiverFailure(409,"任务已变化，请刷新后操作");
@@ -43,6 +46,7 @@ public class ReceivingService {
                 if("RUNNING".equals(row.get("desired_state"))&&!"BLOCKED".equals(row.get("runtime_state")))throw new ReceiverFailure(400,"任务已在运行或等待重试");
             }
             db.update("UPDATE receiving_task SET desired_state=?,runtime_state=?,error_reason='',version=version+1,updated_at=UTC_TIMESTAMP(3) WHERE task_id=?",action.equals("stop")?"STOPPED":"RUNNING",action.equals("stop")?"STOPPING":"STARTING",id);
+            logs.event(id,action.equals("stop")?"STOP_REQUESTED":action.equals("resume")?"RESUME_REQUESTED":"START_REQUESTED","INFO","TASK_OPERATION",operator);
         });return get(id,subject);
     }
     public Map<String,Object> credentials(String id,int version,ReceivingController.Create body,HttpServletRequest request){
@@ -54,6 +58,7 @@ public class ReceivingService {
             if(!"STOPPED".equals(row.get("desired_state"))||!"STOPPED".equals(row.get("runtime_state")))throw new ReceiverFailure(400,"请停止任务并等待连接释放后更新凭据");
             if(row.get("topic_identity")!=null&&!identity.equals(row.get("topic_identity")))throw new ReceiverFailure(400,"主题身份不同，不能覆盖原接收任务");
             db.update("UPDATE receiving_task SET context_json=?,encrypted_secrets=?,version=version+1,error_reason='',updated_at=UTC_TIMESTAMP(3) WHERE task_id=?",stringify(ctx),vault.seal(id,stringify(Map.of("password",body.password(),"token",body.consumptionToken()))),id);
+            logs.event(id,"CREDENTIALS_UPDATED","INFO","CREDENTIALS_REPLACED",ReceiverSecurity.identity(request).path("user_id").asText());
         });return get(id,subject);
     }
     @org.springframework.transaction.annotation.Transactional(readOnly=true,isolation=org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)

@@ -1,11 +1,13 @@
 <script setup>
 import { computed,onBeforeUnmount,onMounted,reactive,ref,watch } from 'vue'
+import KafkaProductionLogs from '../../components/KafkaProductionLogs.vue'
 import { useRoute } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { capabilityApi } from '../../api/capability'
 import { productionApi } from '../../api/production'
 import { explicitDemo,session } from '../../utils/sessionState'
 import { productionLabels,productionCounts,recordPage,sendSelected } from '../../utils/production'
+const logVisible=ref(false)
 const route=useRoute(), candidates=ref([]),capability=ref(''),context=ref(null),rows=ref([]),selected=ref([]),total=ref(0),page=ref(1),size=ref(20)
 const error=ref(''),loading=ref(false),optionsLoading=ref(false),optionsError=ref(''),hasMore=ref(true),sending=ref(false),cancelled=ref(false),results=ref([]),record=ref(null)
 const filters=reactive({containerNo:'',trainNo:'',eventType:'',range:[]})
@@ -43,7 +45,7 @@ watch(()=>session.epoch,()=>{scope++;read++;optionRead++;cancelled.value=true;se
 onMounted(options);onBeforeUnmount(()=>{active=false;scope++;read++;optionRead++;cancelled.value=true;clearData();results.value=[];context.value=null})
 </script>
 <template>
- <div><h2>数据发送</h2>
+ <div><div class="page-heading"><h2>数据发送</h2><el-button :disabled="sending||explicitDemo" @click="logVisible=true">发送记录</el-button></div>
   <el-alert v-if="explicitDemo" title="演示模式不读取真实源记录，也不发送消息" type="info" :closable="false" />
   <el-card v-else>
    <el-alert v-if="optionsError" :title="optionsError" type="error" :closable="false"><el-button @click="options">重试加载能力</el-button></el-alert>
@@ -68,6 +70,7 @@ onMounted(options);onBeforeUnmount(()=>{active=false;scope++;read++;optionRead++
   </el-card>
   <el-dialog :model-value="!!record" title="源记录详情" width="700px" @close="record=null"><pre v-if="record">{{JSON.stringify(record,null,2)}}</pre></el-dialog>
  </div>
+<el-drawer v-model="logVisible" title="本方发送记录" size="90%" destroy-on-close><KafkaProductionLogs v-if="logVisible" /></el-drawer>
 </template>
 <style scoped>
 .filters{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:16px}.filters .el-form-item:last-child{grid-column:span 2}.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}.binding{margin:16px 0}.results{margin-top:20px}.el-pagination{margin-top:20px}pre{white-space:pre-wrap;overflow-wrap:anywhere} @media(max-width:1000px){.filters{grid-template-columns:1fr 1fr}}

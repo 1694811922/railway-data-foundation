@@ -16,10 +16,10 @@ public abstract class AuthenticatedApiTest {
     @Autowired TestRestTemplate authenticatedHttp;
     @Autowired JdbcTemplate identityDb;
     @Autowired PasswordEncoder identityEncoder;
-    String testAdminId,testAdminUsername;
+    String testAdminId,testAdminUsername,testAdminPassword;
     @BeforeEach void authenticatedAdministrator() throws Exception {
         testAdminId="USR_"+UUID.randomUUID().toString().replace("-","");
-        testAdminUsername="test_"+UUID.randomUUID().toString().replace("-","");String password=UUID.randomUUID().toString();
+        testAdminUsername="test_"+UUID.randomUUID().toString().replace("-","");String password=UUID.randomUUID().toString();testAdminPassword=password;
         identityDb.update("INSERT INTO workspace_account(user_id,username,display_name,password_hash,role,created_at,updated_at) VALUES(?,?,?,?,'ADMIN',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))",testAdminId,testAdminUsername,"独立回归管理员",identityEncoder.encode(password));
         var cookies=new CookieManager(null,CookiePolicy.ACCEPT_ALL);var client=HttpClient.newBuilder().cookieHandler(cookies).build();var mapper=new ObjectMapper();
         String base=authenticatedHttp.getRootUri();

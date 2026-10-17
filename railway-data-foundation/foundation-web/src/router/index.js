@@ -28,6 +28,8 @@ const routes = [
     { path: 'runtime-events', component: () => import('../views/runtime/AuditView.vue'), meta: { title: '调用审计' } },
     { path: 'runtime-traces/:id?', component: () => import('../views/runtime/TraceView.vue'), meta: { title: '调用追踪' } },
     { path: 'metrics', component: () => import('../views/runtime/MetricView.vue'), meta: { title: '共享计量' } },
+    { path: 'transfer-monitor', component: () => import('../views/runtime/TransferMonitorView.vue'), meta: { title: '传输监测' } },
+    { path: 'kafka-monitor', component: () => import('../views/runtime/KafkaMonitorView.vue'), meta: { title: 'Kafka 传输监测' } },
     { path: 'about', component: () => import('../views/AboutView.vue'), meta: { title: '系统说明' } },
   ] },
   { path: '/:pathMatch(.*)*', redirect: '/' },
@@ -36,6 +38,10 @@ const router = createRouter({ history: createWebHistory(), routes })
 router.beforeEach(async(to)=>{
   try { await restoreSession() } catch { return publicAuthRoute(to.path)?true:'/login' }
   if(!session.user && !publicAuthRoute(to.path))return '/login'
+  if(session.user?.role==='ADMIN'&&['/runtime-events','/runtime-traces','/metrics','/kafka-monitor'].some(p=>to.path===p||to.path.startsWith(p+'/'))){
+    const query={...to.query};if(to.path==='/kafka-monitor')query.method='KAFKA';if(to.path.startsWith('/runtime-traces/')&&to.params.id)query.traceId=to.params.id
+    return {path:'/transfer-monitor',query,replace:true}
+  }
   if(session.user && (publicAuthRoute(to.path)||!allowedRoute(session.user.role,to.path)))return '/dashboard'
 })
 window.addEventListener('foundation-session-expired',()=>router.replace('/login'))

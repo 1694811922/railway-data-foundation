@@ -1,0 +1,19 @@
+FROM maven:3.9-eclipse-temurin-17 AS build
+WORKDIR /build
+COPY pom.xml ./
+COPY foundation-service foundation-service
+COPY provider-service provider-service
+COPY demand-service demand-service
+RUN mvn -B -ntp -DskipTests package
+COPY deploy/linux/HealthCheck.java /health/HealthCheck.java
+RUN javac --release 17 -d /health /health/HealthCheck.java
+
+FROM eclipse-temurin:17-jre-jammy
+ARG MODULE
+WORKDIR /opt/app
+COPY --from=build /build/${MODULE}/target/${MODULE}-0.1.0-SNAPSHOT.jar /opt/app/app.jar
+COPY --from=build /health/HealthCheck.class /opt/health/HealthCheck.class
+COPY deploy/linux/app-entrypoint.sh /opt/app/entrypoint.sh
+RUN chmod 0555 /opt/app/entrypoint.sh
+USER 10001:10001
+ENTRYPOINT ["/opt/app/entrypoint.sh"]

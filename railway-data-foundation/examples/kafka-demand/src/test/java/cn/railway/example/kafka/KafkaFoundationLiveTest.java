@@ -36,6 +36,7 @@ class KafkaFoundationLiveTest {
     final String run=UUID.randomUUID().toString().replace("-","");
     final String topic="foundation-live-"+run,group="live-group-"+run,control=random();
     final String probe="probe_"+run,writer="writer_"+run,reader="reader_"+run;
+    final String receiverMonitorToken=random()+random();
     final String probePassword=random(),writerPassword=random(),readerPassword=random(),adminPassword=random();
     Path project,evidence;String foundation,provider,sourceId,resourceId,capabilityId,credentialRef;
     Process foundationProcess,providerProcess,browserProcess,receiverProcess;
@@ -146,7 +147,7 @@ class KafkaFoundationLiveTest {
         var scan=data("/sources/"+sourceId+"/scan","POST",null);
         var resource=data("/resources","POST",Map.of("resource_name","KAFKA_LIVE_RESOURCE_"+run,"source_id",sourceId,"scan_task_id",scan.path("task_id").asText(),
             "schema_name","port_source_db","physical_table","container_event","business_description","独立完整链路测试","owner_department","测试","security_level","内部","update_mode","实时"));
-        resourceId=resource.path("resource_id").asText();data("/resources/"+resourceId+"/publish","POST",null);
+        resourceId=resource.path("resource_id").asText();data("/resources/"+resourceId+"/publish","POST",Map.of("version",resource.path("version").asInt(),"reason","独立链路发布"));
         capabilityId=data("/capabilities","POST",Map.of("capability_name","KAFKA_LIVE_CAP_"+run,"resource_id",resourceId,"type","KAFKA_TOPIC","protocol","KAFKA","auth_type","SASL","topic",topic)).path("capability_id").asText();
     }
     long sourceCount()throws Exception{
@@ -426,6 +427,7 @@ class KafkaFoundationLiveTest {
         workspaceLogin();grant=subscriptionAction(grant,"confirm");grant=subscriptionAction(grant,"provision");assertThat(grant.path("broker_access_confirmed").asBoolean()).isTrue();
         workspaceLogin(workspaceDemandName,workspaceDemandPassword);var delivery=data(path+"/credential","POST",Map.of("version",grant.path("version").asInt(),"reason","本主体领取"));
         formalReceiving(delivery);
+        lifecycleRoundTrip(grant,delivery);
         workspaceLogin();grant=current(grant);grant=subscriptionAction(grant,"stop");assertThat(grant.path("execution_state").asText()).isEqualTo("REVOKED");noIdentity(grant);
         workspaceLogin(workspaceDemandName,workspaceDemandPassword);
         long receiverDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(15);JsonNode receiverState=null;while(System.nanoTime()<receiverDeadline){receiverState=received("/receiving-tasks/"+receiverTask,"GET",null);if(receiverState.path("runtime_state").asText().equals("BLOCKED"))break;Thread.sleep(200);}assertThat(receiverState.path("runtime_state").asText()).isEqualTo("BLOCKED");
@@ -433,6 +435,7 @@ class KafkaFoundationLiveTest {
         var historicalExport=response(receiver+"/api/v1/receiving-tasks/"+receiverTask+"/messages/export","GET",null,null);assertThat(historicalExport.statusCode()).isEqualTo(200);assertThat(historicalExport.body().lines().count()).isEqualTo(simulatedMessages+3);
         var historicalLookup=received("/receiving-tasks?grantId="+grant.path("grant_id").asText(),"GET",null);assertThat(historicalLookup.path("total").asInt()).isEqualTo(1);assertThat(historicalLookup.path("items").get(0).path("task_id").asText()).isEqualTo(receiverTask);
         receivingHistoryBrowser();
+        monitorBrowser();
         workspaceLogin();
         try(var client=consumer(delivery,topic,delivery.path("consumer_group").asText())){expectDenied(client);}
         var relation=data("/relationships","POST",Map.of("relationship_name","提供方确认REST_"+run,"provider_subject_id",providerSubject,"demand_subject_id",demandSubject,"resource_id",resourceId,"capability_id",restCapability,"purpose","提供方确认后才允许REST访问","valid_from",Instant.now().minusSeconds(60).truncatedTo(java.time.temporal.ChronoUnit.MILLIS).toString(),"valid_until",Instant.now().plusSeconds(600).truncatedTo(java.time.temporal.ChronoUnit.MILLIS).toString(),"reason","独立登记","policy",Map.of("allowed_fields",List.of("container_no","event_time"),"time_field","event_time","data_from","2026-09-20T00:00:00Z","data_until","2026-09-21T00:00:00Z")));
@@ -446,7 +449,32 @@ class KafkaFoundationLiveTest {
         var result=ownedExternalRest();assertThat(result.statusCode()).isEqualTo(200);
         for(var row:json.readTree(result.body()).path("data")){var keys=new HashSet<String>();row.fieldNames().forEachRemaining(keys::add);assertThat(keys).containsExactlyInAnyOrder("container_no","event_time");}
         data(restPath+"/revoke","POST",Map.of("version",relation.path("version").asInt(),"reason","撤回独立授权"));assertThat(ownedExternalRest().statusCode()).isEqualTo(403);
-        assertThat(data("/resources/"+resourceId,"GET",null)).isEqualTo(ownedResourceBefore);assertThat(data("/resources/"+resourceId+"/fields","GET",null)).isEqualTo(ownedFieldsBefore);assertThat(data("/capabilities/"+capabilityId,"GET",null)).isEqualTo(ownedCapabilityBefore);
+        var resourceAfter=(com.fasterxml.jackson.databind.node.ObjectNode)data("/resources/"+resourceId,"GET",null);assertThat(resourceAfter.path("version").asInt()).isEqualTo(ownedResourceBefore.path("version").asInt()+2);
+        var resourceBefore=(com.fasterxml.jackson.databind.node.ObjectNode)ownedResourceBefore;resourceAfter.remove(List.of("version","updated_at"));resourceBefore.remove(List.of("version","updated_at"));assertThat(resourceAfter).isEqualTo(resourceBefore);
+        var fieldsAfter=data("/resources/"+resourceId+"/fields","GET",null);for(var field:fieldsAfter)((com.fasterxml.jackson.databind.node.ObjectNode)field).remove("resource_version");for(var field:ownedFieldsBefore)((com.fasterxml.jackson.databind.node.ObjectNode)field).remove("resource_version");assertThat(fieldsAfter).isEqualTo(ownedFieldsBefore);assertThat(data("/capabilities/"+capabilityId,"GET",null)).isEqualTo(ownedCapabilityBefore);
+    }
+    void lifecycleBrowser(String action)throws Exception{
+        var config=evidence.resolve("lifecycle-"+action+"-context.json");Files.writeString(config,json.writeValueAsString(Map.of("foundation",foundation,"resource_id",resourceId,"evidence",evidence.toString(),"action",action)));
+        var b=new ProcessBuilder(env("KAFKA_LIVE_NODE"),project.resolve("foundation-web/scripts/resource-lifecycle-live.mjs").toString(),config.toString()).directory(project.resolve("foundation-web").toFile());b.environment().clear();b.environment().putAll(baseEnv());b.environment().put("RESOURCE_LIFE_USER",workspaceProviderName);b.environment().put("RESOURCE_LIFE_PASSWORD",workspaceProviderPassword);b.redirectErrorStream(true);b.redirectOutput(evidence.resolve("lifecycle-"+action+"-browser.log").toFile());browserProcess=b.start();assertThat(browserProcess.waitFor(90,TimeUnit.SECONDS)).isTrue();assertThat(browserProcess.exitValue()).as("Real provider lifecycle UI: "+action).isZero();
+    }
+    void lifecycleRoundTrip(JsonNode grant,JsonNode oldDelivery)throws Exception{
+        lifecycleBrowser("unpublish");workspaceLogin();grant=awaitState(grant,"REVOKED");noIdentity(grant);
+        assertThat(externalRest(HttpClient.newHttpClient()).statusCode()).isEqualTo(403);
+        assertThat(response(provider+"/containers/events/1/publish","POST",null,Map.of("X-Provider-Token",control,"X-Capability-Id",capabilityId)).statusCode()).isEqualTo(403);
+        try(var client=consumer(oldDelivery,topic,oldDelivery.path("consumer_group").asText())){expectDenied(client);}
+        workspaceLogin(workspaceDemandName,workspaceDemandPassword);String taskPath="/receiving-tasks/"+receiverTask;JsonNode task=null;long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(15);
+        while(System.nanoTime()<until){task=received(taskPath,"GET",null);if(task.path("runtime_state").asText().equals("BLOCKED"))break;Thread.sleep(200);}assertThat(task.path("runtime_state").asText()).isEqualTo("BLOCKED");assertThat(task.path("received_count").asInt()).isEqualTo(simulatedMessages+3);
+        lifecycleBrowser("republish");workspaceLogin();grant=current(grant);assertThat(grant.path("execution_state").asText()).isEqualTo("REVOKED");assertThat(externalRest(HttpClient.newHttpClient()).statusCode()).isEqualTo(403);
+        var rest=data("/relationships/"+restRelationship,"GET",null);assertThat(rest.path("status").asText()).isEqualTo("SUSPENDED");data("/relationships/"+restRelationship+"/enable","POST",Map.of("version",rest.path("version").asInt(),"reason","资源重新发布后管理员手动恢复"));assertThat(externalRest(HttpClient.newHttpClient()).statusCode()).isEqualTo(200);
+        grant=subscriptionAction(grant,"provision");assertThat(grant.path("broker_username").asText()).isNotEqualTo(oldDelivery.path("grant").path("broker_username").asText());
+        workspaceLogin(workspaceDemandName,workspaceDemandPassword);var fresh=data("/kafka-subscriptions/"+grant.path("grant_id").asText()+"/credential","POST",Map.of("version",grant.path("version").asInt(),"reason","重新配置后领取新凭据"));
+        task=received(taskPath,"GET",null);received(taskPath+"/stop","POST",Map.of("version",task.path("version").asInt()));until=System.nanoTime()+TimeUnit.SECONDS.toNanos(15);
+        while(System.nanoTime()<until){task=received(taskPath,"GET",null);if(task.path("runtime_state").asText().equals("STOPPED"))break;Thread.sleep(200);}assertThat(task.path("runtime_state").asText()).isEqualTo("STOPPED");
+        task=received(taskPath+"/credentials","PUT",Map.of("version",task.path("version").asInt(),"configuration",Map.of("task_name",task.path("task_name").asText(),"grant_id",grant.path("grant_id").asText(),"password",fresh.path("password").asText(),"consumption_token",fresh.path("consumption_token").asText(),"start_position","EARLIEST")));
+        received(taskPath+"/resume","POST",Map.of("version",task.path("version").asInt()));until=System.nanoTime()+TimeUnit.SECONDS.toNanos(25);
+        while(System.nanoTime()<until){task=received(taskPath,"GET",null);if(task.path("runtime_state").asText().equals("RUNNING"))break;Thread.sleep(200);}assertThat(task.path("runtime_state").asText()).isEqualTo("RUNNING");assertThat(task.path("received_count").asInt()).isEqualTo(simulatedMessages+3);
+        try(var client=consumer(oldDelivery,topic,oldDelivery.path("consumer_group").asText())){expectDenied(client);}
+        Files.writeString(evidence.resolve("resource-lifecycle-verification.json"),json.writeValueAsString(Map.of("browser_unpublish_republish",true,"broker_revoked",true,"rest_suspended",true,"receiver_blocked",true,"no_automatic_restore",true,"fresh_identity_manual_resume",true,"old_credentials_denied",true,"historical_messages_preserved",simulatedMessages+3)));
     }
     Connection receiverDb()throws Exception{var c=DriverManager.getConnection(env("KAFKA_LIVE_DEMAND_DB_URL"),env("DEMAND_DB_USER"),env("DEMAND_DB_PASSWORD"));assertThat(c.getCatalog()).isEqualTo("demand_receiver_live_test");return c;}
     JsonNode received(String path,String method,Object body)throws Exception{var response=response(receiver+"/api/v1"+path,method,body,null);assertThat(response.statusCode()).as("Receiver "+method+" "+path).isEqualTo(200);return json.readTree(response.body()).path("data");}
@@ -454,6 +482,7 @@ class KafkaFoundationLiveTest {
     void formalReceiving(JsonNode delivery)throws Exception{
         int receiverPort=port();receiver="http://127.0.0.1:"+receiverPort;
         receiverEnvironment=new HashMap<>(Map.of("DEMAND_BIND","127.0.0.1","DEMAND_PORT",String.valueOf(receiverPort),"DEMAND_DB_NAME","demand_receiver_live_test","DEMAND_DB_URL",env("KAFKA_LIVE_DEMAND_DB_URL"),"DEMAND_DB_USER",env("DEMAND_DB_USER"),"DEMAND_DB_PASSWORD",env("DEMAND_DB_PASSWORD"),"DEMAND_CREDENTIAL_KEY",env("DEMAND_CREDENTIAL_KEY"),"DEMAND_FOUNDATION_URL",foundation));
+        receiverEnvironment.put("DEMAND_TELEMETRY_TOKEN",receiverMonitorToken);
         receiverEnvironment.put("DEMAND_LOG_FILE",evidence.resolve("demand-runtime.log").toString());
         receiverProcess=service("demand-service","cn.railway.demand.DemandApplication",receiverEnvironment);waitHealthy(receiverProcess,receiver+"/api/v1/demand/health");
         assertThat(HttpClient.newHttpClient().send(HttpRequest.newBuilder(URI.create(receiver+"/api/v1/receiving-tasks")).GET().build(),HttpResponse.BodyHandlers.discarding()).statusCode()).isEqualTo(401);
@@ -461,12 +490,17 @@ class KafkaFoundationLiveTest {
         var bad=new HashMap<>(body);bad.put("password","ks_"+"x".repeat(43));assertThat(response(receiver+"/api/v1/receiving-tasks","POST",bad,null).statusCode()).isEqualTo(400);
         var task=received("/receiving-tasks","POST",body);receiverTask=task.path("task_id").asText();String path="/receiving-tasks/"+receiverTask;
         var receiverManifest=(com.fasterxml.jackson.databind.node.ObjectNode)json.readTree(Files.readString(evidence.resolve("test-manifest.json")));receiverManifest.put("receiver_task",receiverTask);receiverManifest.put("receiver_database","demand_receiver_live_test");receiverManifest.put("receiver_fault_constraint","receiver_fault_"+run);receiverManifest.put("other_demand_account",workspaceOtherDemandName);Files.writeString(evidence.resolve("test-manifest.json"),receiverManifest.toString());
+        workspaceLogin();assertThat(response(receiver+"/api/v1/receiving-tasks/transfer-logs","GET",null,null).statusCode()).isEqualTo(403);
+        workspaceLogin(workspaceProviderName,workspaceProviderPassword);assertThat(response(receiver+"/api/v1/receiving-tasks/transfer-logs","GET",null,null).statusCode()).isEqualTo(403);
+        workspaceLogin(workspaceDemandName,workspaceDemandPassword);
         assertThat(task.toString()).doesNotContain(delivery.path("password").asText(),delivery.path("consumption_token").asText());
         assertThat(response(receiver+"/api/v1/receiving-tasks","POST",body,null).statusCode()).isEqualTo(409);
         workspaceLogin();var otherSubject=data("/subjects","POST",Map.of("subject_code","RECEIVER_B_"+run.toUpperCase(Locale.ROOT),"subject_name","隔离需求方B","subject_type","DEMAND","owner_department","测试单位","description","主体隔离"));subjectIds.add(otherSubject.path("subject_id").asText());
         data("/accounts","POST",Map.of("username",workspaceOtherDemandName,"display_name","隔离需求方B","role","DEMAND","subject_id",otherSubject.path("subject_id").asText(),"password",workspaceOtherDemandPassword));
         workspaceLogin(workspaceOtherDemandName,workspaceOtherDemandPassword);assertThat(received("/receiving-tasks","GET",null).path("total").asLong()).isZero();
         var otherLookup=received("/receiving-tasks?grantId="+delivery.path("grant").path("grant_id").asText(),"GET",null);assertThat(otherLookup.path("total").asLong()).isZero();assertThat(otherLookup.path("items").size()).isZero();
+        assertThat(received("/receiving-tasks/transfer-logs","GET",null).path("total").asLong()).isZero();
+        assertThat(response(receiver+"/api/v1/receiving-tasks/transfer-logs?taskId="+receiverTask,"GET",null,null).statusCode()).isEqualTo(403);
         for(String tail:List.of("","/messages","/progress","/messages/export","/messages/1/download"))assertThat(response(receiver+"/api/v1"+path+tail,"GET",null,null).statusCode()).isEqualTo(403);
         assertThat(response(receiver+"/api/v1"+path+"/start","POST",Map.of("version",1),null).statusCode()).isEqualTo(403);
         assertThat(response(receiver+"/api/v1/receiving-tasks","POST",body,null).statusCode()).isEqualTo(403);
@@ -524,6 +558,14 @@ class KafkaFoundationLiveTest {
     void productionBrowser()throws Exception{
         var config=evidence.resolve("production-browser-context.json");Files.writeString(config,json.writeValueAsString(Map.of("foundation",foundation,"provider",provider,"capability",capabilityId,"evidence",evidence.toString())));
         var b=new ProcessBuilder(env("KAFKA_LIVE_NODE"),project.resolve("foundation-web/scripts/production-live.mjs").toString(),config.toString()).directory(project.resolve("foundation-web").toFile());b.environment().clear();b.environment().putAll(baseEnv());b.environment().put("KAFKA_LIVE_WORKSPACE_USER",workspaceProviderName);b.environment().put("KAFKA_LIVE_WORKSPACE_PASSWORD",workspaceProviderPassword);b.redirectErrorStream(true);b.redirectOutput(evidence.resolve("production-browser.log").toFile());browserProcess=b.start();assertThat(browserProcess.waitFor(90,TimeUnit.SECONDS)).isTrue();assertThat(browserProcess.exitValue()).as("Real provider production UI").isZero();
+    }
+    void monitorBrowser()throws Exception{
+        workspaceLogin();long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(30);JsonNode events=null;
+        while(System.nanoTime()<until){events=data("/kafka-transfer-events?taskId="+receiverTask+"&eventType=BLOCKED","GET",null);if(events.path("total").asInt()>0)break;Thread.sleep(200);}
+        assertThat(events.path("total").asInt()).as("Revocation event is reported without the revoked subscription token").isPositive();
+        assertThat(events.toString()).doesNotContain(receiverMonitorToken,"message_value","encrypted_secrets","container_no");
+        var config=evidence.resolve("monitor-browser-context.json");Files.writeString(config,json.writeValueAsString(Map.of("foundation",foundation,"task_id",receiverTask,"evidence",evidence.toString())));
+        var b=new ProcessBuilder(env("KAFKA_LIVE_NODE"),project.resolve("foundation-web/scripts/monitor-admin-live.mjs").toString(),config.toString()).directory(project.resolve("foundation-web").toFile());b.environment().clear();b.environment().putAll(baseEnv());b.environment().put("KAFKA_LIVE_WORKSPACE_USER",workspaceName);b.environment().put("KAFKA_LIVE_WORKSPACE_PASSWORD",workspacePassword);b.redirectErrorStream(true);b.redirectOutput(evidence.resolve("monitor-browser.log").toFile());browserProcess=b.start();assertThat(browserProcess.waitFor(90,TimeUnit.SECONDS)).isTrue();assertThat(browserProcess.exitValue()).as("Administrator technical receiver monitor").isZero();
     }
     void receivingHistoryBrowser()throws Exception{
         var config=evidence.resolve("receiver-browser-context.json");
@@ -608,6 +650,7 @@ class KafkaFoundationLiveTest {
                 "FOUNDATION_CREDENTIAL_KEY",env("FOUNDATION_CREDENTIAL_KEY"),"FOUNDATION_BIND","127.0.0.1","FOUNDATION_PORT",String.valueOf(fport),
                 "PROVIDER_CONTROL_TOKEN",control,"PROVIDER_TELEMETRY_NODE_ID","kafka-live-"+run,"PROVIDER_REST_BASE_URL",provider));
             f.putAll(Map.of("PROVIDER_SOURCE_ENV_PREFIX","SOURCE_KAFKA_LIVE","SOURCE_KAFKA_LIVE_HOST",sourceUri.getHost(),"SOURCE_KAFKA_LIVE_PORT",String.valueOf(sourceUri.getPort()),"SOURCE_KAFKA_LIVE_DATABASE","port_source_db"));
+            f.put("FOUNDATION_RECEIVER_TELEMETRY_TOKEN",receiverMonitorToken);f.put("RECEIVER_TELEMETRY_NODE_ID","receiver-live-"+run);
             f.put("FOUNDATION_BOOTSTRAP_ADMIN_USERNAME",workspaceName);f.put("FOUNDATION_BOOTSTRAP_ADMIN_PASSWORD",workspacePassword);
             foundationProcess=service("foundation-service","cn.railway.foundation.FoundationApplication",f);waitHealthy(foundationProcess,foundation+"/api/v1/health");workspaceLogin();
             var p=new HashMap<String,String>(kafkaEnv("PROVIDER_KAFKA_",writer,writerPassword));
@@ -662,9 +705,9 @@ class KafkaFoundationLiveTest {
             var offsets=admin.listOffsets(Map.of(new org.apache.kafka.common.TopicPartition(topic,0),OffsetSpec.latest())).all().get(5,TimeUnit.SECONDS);
             assertThat(offsets.values().iterator().next().offset()).as("Initial messages plus three real provider UI publications; rejected attempts never publish").isEqualTo(simulatedMessages+3);
             assertThat(sourceFingerprint()).as("Source rows unchanged, not only their count").isEqualTo(sourceBefore);
-            var verification=new LinkedHashMap<String,Object>();verification.put("passed",true);verification.put("messages",simulatedMessages);verification.put("bytes",simulatedBytes);verification.put("scram",true);verification.put("subscriber_denied_before_fixture_acl",true);verification.put("source_rows",sourceCount());verification.put("source_unchanged",true);verification.put("resource_unchanged",true);verification.put("telemetry_matched",true);verification.put("topic",topic);verification.put("production_offsets",simulatedReceipts);verification.put("subscription_revoked",true);verification.put("rest_regression",true);verification.put("provider_confirmation_flow",true);verification.put("simulated_data",true);verification.put("source_data_location","port_source_db.container_event (project SQL seed)");
+            var verification=new LinkedHashMap<String,Object>();verification.put("passed",true);verification.put("messages",simulatedMessages);verification.put("bytes",simulatedBytes);verification.put("scram",true);verification.put("subscriber_denied_before_fixture_acl",true);verification.put("source_rows",sourceCount());verification.put("source_unchanged",true);verification.put("resource_business_metadata_unchanged",true);verification.put("lifecycle_version_increments",2);verification.put("telemetry_matched",true);verification.put("topic",topic);verification.put("production_offsets",simulatedReceipts);verification.put("subscription_revoked",true);verification.put("rest_regression",true);verification.put("provider_confirmation_flow",true);verification.put("simulated_data",true);verification.put("source_data_location","port_source_db.container_event (project SQL seed)");
             Files.writeString(evidence.resolve("verification.json"),json.writeValueAsString(verification),StandardCharsets.UTF_8);
-            verification.put("receiver_messages",simulatedMessages+1);verification.put("receiver_database_failure_recovered",true);verification.put("receiver_browser_verified",true);verification.put("receiver_restarted",true);
+            verification.put("receiver_messages",simulatedMessages+3);verification.put("receiver_database_failure_recovered",true);verification.put("receiver_browser_verified",true);verification.put("receiver_restarted",true);
             Files.writeString(evidence.resolve("verification.json"),json.writeValueAsString(verification),StandardCharsets.UTF_8);
         } finally {
             // Always stop only the processes created above; preserve development services.

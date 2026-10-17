@@ -17,16 +17,16 @@ public class ReceiverAuthorizationController {
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public record Context(SubscriptionService.Grant grant,String clusterId,String bootstrapServers,String securityProtocol,String saslMechanism){}
     @PostMapping("/{id}/receiver-context")
-    @Transactional(isolation=Isolation.REPEATABLE_READ)
+    @Transactional(isolation=Isolation.READ_COMMITTED)
     public ApiResponse<Context> workspace(@PathVariable String id){
         if(!Actor.demand())Actor.deny();lock(id);return ApiResponse.success(context(id));
     }
     @PostMapping("/{id}/receiver-access/check")
-    @Transactional(isolation=Isolation.REPEATABLE_READ)
+    @Transactional(isolation=Isolation.READ_COMMITTED)
     public ApiResponse<Context> worker(@PathVariable String id,@RequestHeader(value="Authorization",required=false) String authorization){
-        lock(id);credentials.verifyCredential(id,authorization);return ApiResponse.success(context(id));
+        credentials.verifyCredential(id,authorization);lock(id);credentials.verifyCredential(id,authorization);return ApiResponse.success(context(id));
     }
-    private void lock(String id){db.query("SELECT grant_id FROM kafka_subscription_grant WHERE grant_id=? FOR UPDATE",(r,n)->r.getString(1),id);}
+    private void lock(String id){cn.railway.foundation.resource.ResourceLocks.child(db,"kafka_subscription_grant",id);db.query("SELECT grant_id FROM kafka_subscription_grant WHERE grant_id=? FOR UPDATE",(r,n)->r.getString(1),id);}
     private Context context(String id){
         var grant=grants.get(id);
         if(!grant.brokerAccessConfirmed())throw new BusinessException(ErrorCode.ACCESS_FORBIDDEN,"订阅授权无效，不能接收数据");

@@ -126,7 +126,7 @@ class ScanResourceIntegrationTest extends AuthenticatedApiTest {
                         "time_field",true,"sensitivity_level","内部","resource_version",1)),JsonNode.class);
         assertThat(edit.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(edit.getBody().path("data").path("time_field").asBoolean()).isTrue();
-        var publish=http.postForObject("/api/v1/resources/"+id+"/publish",null,JsonNode.class).path("data");
+        var publish=http.postForObject("/api/v1/resources/"+id+"/publish",Map.of("version",db.queryForObject("SELECT version FROM data_resource WHERE resource_id=?",Integer.class,id),"reason","测试资源发布"),JsonNode.class).path("data");
         assertThat(publish.path("status").asText()).isEqualTo("PUBLISHED");
         assertThat(publish.path("version").asInt()).isGreaterThan(1);
         assertThat(db.queryForObject("SELECT COUNT(*) FROM data_resource WHERE resource_id=?",Integer.class,id)).isEqualTo(1);
@@ -187,7 +187,7 @@ class ScanResourceIntegrationTest extends AuthenticatedApiTest {
         assertThat(saved.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(saved.getBody().path("data").path("resource_version").asInt()).isEqualTo(3);
         for(var field:resourceFields(id)) assertThat(field.path("resource_version").asInt()).isEqualTo(3);
-        assertThat(http.postForEntity("/api/v1/resources/"+id+"/publish",null,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(http.postForEntity("/api/v1/resources/"+id+"/publish",Map.of("version",db.queryForObject("SELECT version FROM data_resource WHERE resource_id=?",Integer.class,id),"reason","测试资源发布"),JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(putField(id,"event_time",fieldEdit(3,"发布前旧输入")).getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(db.queryForObject("SELECT version FROM data_resource WHERE resource_id=?",Integer.class,id)).isEqualTo(4);
     }
@@ -221,11 +221,11 @@ class ScanResourceIntegrationTest extends AuthenticatedApiTest {
     }
     @Test void concurrentPublishAndDeleteNeverLeavePublishedResourceWithoutFields() throws Exception {
         String id=http.postForObject("/api/v1/resources",snapshotResource(scanSnapshot()),JsonNode.class).path("data").path("resource_id").asText();
-        var results=simultaneously(()->http.postForEntity("/api/v1/resources/"+id+"/publish",null,JsonNode.class),
-                ()->http.exchange("/api/v1/resources/"+id,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class));
+        var results=simultaneously(()->http.postForEntity("/api/v1/resources/"+id+"/publish",Map.of("version",1,"reason","测试资源发布"),JsonNode.class),
+                ()->http.exchange("/api/v1/resources/"+id+"?version="+1,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class));
         assertThat(results.stream().filter(r->r.getStatusCode().is2xxSuccessful()).count()).isEqualTo(1);
         if(results.get(0).getStatusCode().is2xxSuccessful()) {
-            assertThat(results.get(1).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(results.get(1).getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
             assertThat(db.queryForObject("SELECT status FROM data_resource WHERE resource_id=?",String.class,id)).isEqualTo("PUBLISHED");
             assertThat(resourceFields(id).size()).isEqualTo(12);
         } else {
@@ -308,14 +308,14 @@ class ScanResourceIntegrationTest extends AuthenticatedApiTest {
                 "owner_department","数据管理部","security_level","内部","update_mode","实时"));
         String draftId=http.postForObject("/api/v1/resources",resourceBody,JsonNode.class).path("data").path("resource_id").asText();
         assertThat(http.exchange("/api/v1/scan-tasks/"+referencedTask,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(http.exchange("/api/v1/resources/"+draftId,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(http.exchange("/api/v1/resources/"+draftId+"?version="+db.queryForObject("SELECT version FROM data_resource WHERE resource_id=?",Integer.class,draftId),HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(db.queryForObject("SELECT COUNT(*) FROM resource_field WHERE resource_id=?",Integer.class,draftId)).isZero();
         assertThat(http.exchange("/api/v1/scan-tasks/"+referencedTask,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.OK);
 
         resourceBody.put("scan_task_id",http.postForObject("/api/v1/sources/"+sourceId+"/scan",null,JsonNode.class).path("data").path("task_id").asText());
         String publishedId=http.postForObject("/api/v1/resources",resourceBody,JsonNode.class).path("data").path("resource_id").asText();
-        http.postForObject("/api/v1/resources/"+publishedId+"/publish",null,JsonNode.class);
-        assertThat(http.exchange("/api/v1/resources/"+publishedId,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        http.postForObject("/api/v1/resources/"+publishedId+"/publish",Map.of("version",db.queryForObject("SELECT version FROM data_resource WHERE resource_id=?",Integer.class,publishedId),"reason","测试资源发布"),JsonNode.class);
+        assertThat(http.exchange("/api/v1/resources/"+publishedId+"?version="+db.queryForObject("SELECT version FROM data_resource WHERE resource_id=?",Integer.class,publishedId),HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         var capability=Map.of("capability_name","待删除草稿能力","resource_id",publishedId,"type","REST_API",
                 "http_method","GET","endpoint","/containers/events","protocol","HTTP","auth_type","NONE");
         String capabilityId=http.postForObject("/api/v1/capabilities",capability,JsonNode.class).path("data").path("capability_id").asText();
@@ -332,7 +332,7 @@ class ScanResourceIntegrationTest extends AuthenticatedApiTest {
         var rest=Map.of("capability_name","事件查询接口","resource_id",resourceId,"type","REST_API",
                 "http_method","GET","endpoint","/containers/events","protocol","HTTP","auth_type","NONE");
         assertThat(http.postForEntity("/api/v1/capabilities",rest,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        http.postForObject("/api/v1/resources/"+resourceId+"/publish",null,JsonNode.class);
+        http.postForObject("/api/v1/resources/"+resourceId+"/publish",Map.of("version",db.queryForObject("SELECT version FROM data_resource WHERE resource_id=?",Integer.class,resourceId),"reason","测试资源发布"),JsonNode.class);
         var created=http.postForObject("/api/v1/capabilities",rest,JsonNode.class).path("data");
         String capId=created.path("capability_id").asText();
         assertThat(capId).startsWith("CAP_");
@@ -397,7 +397,7 @@ class ScanResourceIntegrationTest extends AuthenticatedApiTest {
                 "physical_table","container_event","business_description","用于验证真实接口状态",
                 "owner_department","测试单位","security_level","内部","update_mode","实时");
         String resourceId=http.postForObject("/api/v1/resources",resource,JsonNode.class).path("data").path("resource_id").asText();
-        http.postForObject("/api/v1/resources/"+resourceId+"/publish",null,JsonNode.class);
+        http.postForObject("/api/v1/resources/"+resourceId+"/publish",Map.of("version",db.queryForObject("SELECT version FROM data_resource WHERE resource_id=?",Integer.class,resourceId),"reason","测试资源发布"),JsonNode.class);
         return http.postForObject("/api/v1/capabilities",Map.of("capability_name","REST启停查询","resource_id",resourceId,
                 "type","REST_API","http_method","GET","endpoint","/containers/events","protocol","HTTP","auth_type","NONE"),JsonNode.class)
                 .path("data").path("capability_id").asText();

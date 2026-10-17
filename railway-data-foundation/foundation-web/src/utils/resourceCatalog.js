@@ -6,7 +6,7 @@ export function catalogQuery(query={}) {
   const size=Number(query.pageSize), page=Number(query.page)
   return {
     filters:{ keyword:value(query.q).slice(0,200), source_id:value(query.sourceFilter),
-      status:['DRAFT','PUBLISHED'].includes(query.status) ? query.status : '',
+      status:['DRAFT','PUBLISHED','OFFLINE','RETIRED'].includes(query.status) ? query.status : '',
       security_level:['公开','内部','敏感','机密'].includes(query.security) ? query.security : '' },
     page:Number.isSafeInteger(page) && page>0 ? page : 1,
     pageSize:resourcePageSizes.includes(size) ? size : 10,

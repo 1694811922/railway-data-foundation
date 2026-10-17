@@ -61,7 +61,7 @@ public class WorkspaceGate implements HandlerInterceptor, WebMvcConfigurer {
             case "resources" -> {
                 if(id!=null)resource(id);
                 allowed=read&&(p.length<=2||p.length==3&&Set.of("fields","capabilities").contains(action));
-                if(Actor.provider())allowed=allowed||p.length==1&&method.equals("POST")||p.length==2&&Set.of("PUT","DELETE").contains(method)||p.length==3&&action.equals("publish")&&method.equals("POST")||p.length==4&&action.equals("fields")&&method.equals("PUT")||read&&(action.equals("versions")&&(p.length==3||p.length==4)||action.equals("schema-comparison")&&(p.length==3||p.length==4&&p[3].equals("scans")));
+                if(Actor.provider())allowed=allowed||p.length==1&&method.equals("POST")||p.length==2&&Set.of("PUT","DELETE").contains(method)||p.length==3&&Set.of("publish","unpublish","republish","retire").contains(action)&&method.equals("POST")||p.length==4&&action.equals("fields")&&method.equals("PUT")||read&&(action.equals("lifecycle-impact")&&p.length==3||action.equals("versions")&&(p.length==3||p.length==4)||action.equals("schema-comparison")&&(p.length==3||p.length==4&&p[3].equals("scans")));
                 String scan=req.getParameter("scanTaskId");if(scan!=null)scan(scan);
             }
             case "capabilities" -> {if(id!=null)capability(id);allowed=read&&(p.length<=2||p.length==3&&action.equals("invocation"));if(Actor.provider())allowed=allowed||p.length==1&&method.equals("POST")||p.length==2&&Set.of("PUT","DELETE").contains(method)||p.length==3&&(read&&Set.of("runtime","kafka-runtime").contains(action)||method.equals("POST")&&Set.of("verify","enable","disable").contains(action));}

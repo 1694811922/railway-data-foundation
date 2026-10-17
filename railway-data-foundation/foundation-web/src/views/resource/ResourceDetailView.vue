@@ -6,6 +6,9 @@ import { hub } from '../../utils/dataHub'
 import { resourceError, validateResource, isResourceConflict } from '../../utils/resourceForm'
 import DemoNotice from '../../components/DemoNotice.vue'
 import StatusTag from '../../components/StatusTag.vue'
+import ResourceLifecycleDialog from '../../components/ResourceLifecycleDialog.vue'
+import ResourceLifecycleNotice from '../../components/ResourceLifecycleNotice.vue'
+import {lifecycleActions,lifecycleLabels} from '../../utils/resourceLifecycle'
 import SchemaComparisonPanel from '../../components/SchemaComparisonPanel.vue'
 import ResourceHistoryPanel from '../../components/ResourceHistoryPanel.vue'
 import { catalogPage, catalogQuery, catalogRouteQuery, resourcePageSizes } from '../../utils/resourceCatalog'
@@ -16,6 +19,7 @@ function returnToCatalog() {
   const state=catalogQuery(route.query)
   router.push({path:'/resources',query:catalogRouteQuery(state.filters,state.page,state.pageSize)})
 }
+const lifecycleOpen=ref(false),lifecycleResource=ref(null),lifecycleAction=ref(''),lifecycleBusy=ref(false)
 const item = ref(null), fields = ref([]), capabilities = ref([]), demo = ref(false), tab = ref('base')
 const dialog = ref(false), loading = ref(false), publishing = ref(false), savingField = ref(false)
 const loadError = ref(''), fieldError = ref(''), capabilityError = ref('')
@@ -27,7 +31,7 @@ const filteredFields=computed(()=>filterResourceFields(fields.value,fieldFilter)
 const filteredCapabilities=computed(()=>filterCapabilities(capabilities.value,capabilityFilter))
 const fieldRows=computed(()=>catalogPage(filteredFields.value,fieldPage.value,fieldSize.value))
 const capabilityRows=computed(()=>catalogPage(filteredCapabilities.value,capabilityPage.value,capabilitySize.value))
-const busy=computed(()=>publishing.value || savingField.value)
+const busy=computed(()=>publishing.value || savingField.value || lifecycleOpen.value || lifecycleBusy.value)
 const capabilityTypes=['REST_API','KAFKA_TOPIC','CDC_STREAM','READONLY_QUERY']
 const capabilityTypesText={REST_API:'REST接口',KAFKA_TOPIC:'Kafka主题',CDC_STREAM:'CDC变化流',READONLY_QUERY:'只读查询'}
 watch([()=>fieldFilter.keyword,()=>fieldFilter.mark,()=>fieldFilter.sensitivity_level,fieldSize],()=>{fieldPage.value=1})
@@ -74,7 +78,7 @@ async function load(allowPendingWrite=false) {
   } finally { if (current(version,id)) loading.value = false }
 }
 function openField(row) {
-  if(loading.value || busy.value || fieldsLoading.value || fieldError.value || !item.value) return
+  if(item.value?.status==='RETIRED'||loading.value || busy.value || fieldsLoading.value || fieldError.value || !item.value) return
   fieldConflict.value=''
   editScope={resource_id:item.value.resource_id,version:item.value.version,resource_version:row.resource_version,field_name:row.field_name,demo:demo.value}
   Object.assign(edit, { field_name:row.field_name, business_name:row.business_name || '', business_description:row.business_description || '',
@@ -99,20 +103,11 @@ async function saveField() {
   } }
   finally { savingField.value = false }
 }
-async function publish() {
-  if (busy.value || loading.value || !item.value || item.value.status!=='DRAFT') return
-  const invalid = validateResource(item.value)
-  if (invalid) return ElMessage.warning(invalid)
-  publishing.value = true
-  const version=readVersion, id=item.value.resource_id
-  try {
-    const result = await hub.publishResource(id)
-    if(!current(version,id)) return
-    ElMessage.success(`已发布 ${result.value.resource_id}${result.demo ? '（演示数据）' : ''}`)
-    await load(true)
-  } catch (error) { if(current(version,id)) ElMessage.error(resourceError(error, '发布资源')) }
-  finally { publishing.value = false }
+function openLifecycle(action){
+  if(busy.value||loading.value||!item.value)return
+  lifecycleResource.value={...item.value};lifecycleAction.value=action;lifecycleOpen.value=true
 }
+function publish(){openLifecycle('publish')}
 function resetFieldFilter(){Object.assign(fieldFilter,{keyword:'',mark:'',sensitivity_level:''});fieldPage.value=1}
 function resetCapabilityFilter(){Object.assign(capabilityFilter,{keyword:'',type:'',status:'',health_status:''});capabilityPage.value=1}
 function openCapabilities(create=false){
@@ -122,7 +117,7 @@ function openCapabilities(create=false){
 watch(() => route.params.id, () => {
   // Pending writes remain locked until settled, but never refresh/close a new resource view.
   ++readVersion; ++fieldReadVersion; ++capabilityReadVersion
-  dialog.value=false; editScope=null; tab.value='base'; resetFieldFilter();resetCapabilityFilter()
+  lifecycleOpen.value=false;dialog.value=false; editScope=null; tab.value='base'; resetFieldFilter();resetCapabilityFilter()
   // Reads for a newly selected resource are safe while an old resource write is finishing.
   load(true)
 }, { immediate:true })
@@ -133,10 +128,11 @@ onBeforeUnmount(()=>{active=false;++readVersion;++fieldReadVersion;++capabilityR
   <div v-if="item" class="stack">
     <div class="detail-actions"><el-button link @click="returnToCatalog">← 返回资源目录</el-button><div>
       <el-button :loading="loading" :disabled="publishing || savingField" @click="load">刷新详情</el-button>
-      <el-button v-if="item.status==='DRAFT'" type="primary" :loading="publishing" :disabled="loading || savingField" @click="publish">发布资源</el-button>
+      <el-button v-for="action in lifecycleActions(item.status)" :key="action" :type="action==='retire'?'danger':'primary'" :disabled="loading || busy" @click="openLifecycle(action)">{{lifecycleLabels[action]}}</el-button>
     </div></div>
     <div class="detail-hero"><div><h1>{{ item.resource_name }}</h1><div class="detail-pills"><span class="id-text">{{ item.resource_id }}</span><span>来源系统：{{ item.source_name || item.source_id }}</span><span>版本 V{{ item.version }}</span></div></div><StatusTag :value="item.status" /></div>
     <DemoNotice :show="demo" />
+    <ResourceLifecycleNotice :resource="item" :demo="demo" />
 
     <div class="panel" v-loading="loading"><el-tabs v-model="tab">
       <el-tab-pane label="基本信息" name="base"><el-descriptions :column="2" border style="margin-top:18px">
@@ -174,13 +170,13 @@ onBeforeUnmount(()=>{active=false;++readVersion;++fieldReadVersion;++capabilityR
           <el-table-column prop="sensitivity_level" label="敏感等级" width="100" />
           <el-table-column prop="business_description" label="业务描述" min-width="180" show-overflow-tooltip />
           <el-table-column prop="technical_comment" label="技术注释" min-width="180" show-overflow-tooltip />
-          <el-table-column label="操作" width="80" fixed="right"><template #default="{row}"><el-button link type="primary" :disabled="loading || busy || fieldsLoading" @click="openField(row)">编辑</el-button></template></el-table-column>
+          <el-table-column label="操作" width="80" fixed="right"><template #default="{row}"><el-button link type="primary" :disabled="item.status==='RETIRED' || loading || busy || fieldsLoading" @click="openField(row)">编辑</el-button></template></el-table-column>
         </el-table>
         <el-pagination v-if="!fieldError" v-model:current-page="fieldPage" v-model:page-size="fieldSize" :page-sizes="resourcePageSizes" :total="filteredFields.length" layout="total, sizes, prev, pager, next" class="detail-pagination" data-testid="resource-field-pagination" />
       </el-tab-pane>
       <el-tab-pane :label="`接口能力 · ${capabilitiesLoading || capabilityError ? '—' : capabilities.length}`" name="capabilities">
         <div class="panel-title" style="margin-top:16px">关联接口能力 <div class="detail-buttons"><el-button :loading="capabilitiesLoading" :disabled="loading || busy" @click="loadSection('capabilities')">重新加载能力</el-button><el-button :disabled="loading || busy" @click="openCapabilities()">管理关联能力</el-button><el-button type="primary" :disabled="item.status!=='PUBLISHED' || loading || busy" @click="openCapabilities(true)">＋ 注册能力</el-button></div></div>
-        <p v-if="item.status!=='PUBLISHED'" class="dim">请先发布资源，再登记接口能力。</p>
+        <el-alert v-if="item.status==='OFFLINE'||item.status==='RETIRED'" title="资源已下架或退役，关联能力登记保留，当前不可用于共享访问。" type="warning" :closable="false" />
         <div class="detail-filters capability-filters">
           <el-input v-model="capabilityFilter.keyword" aria-label="关联能力关键词" placeholder="能力名称、编号、路径或主题" clearable maxlength="200" />
           <el-select v-model="capabilityFilter.type" aria-label="关联能力类型" placeholder="全部类型" clearable><el-option v-for="type in capabilityTypes" :key="type" :label="capabilityTypesText[type]" :value="type" /></el-select>
@@ -219,6 +215,7 @@ onBeforeUnmount(()=>{active=false;++readVersion;++fieldReadVersion;++capabilityR
   <div v-else class="panel empty-hint" v-loading="loading">
     <p>{{ loadError || '正在加载资源详情…' }}</p><el-button v-if="loadError" @click="load">重新加载</el-button><el-button link type="primary" @click="returnToCatalog">返回资源目录</el-button>
   </div>
+<ResourceLifecycleDialog v-model="lifecycleOpen" :resource="lifecycleResource" :action="lifecycleAction" :demo="demo" @busy="lifecycleBusy=$event" @changed="load(true)" />
 </template>
 <style scoped>
 .detail-actions { display:flex; justify-content:space-between; align-items:center; }

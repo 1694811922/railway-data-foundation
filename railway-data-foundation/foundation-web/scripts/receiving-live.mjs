@@ -76,6 +76,33 @@ try{
   assert.equal(await page.getByText('落库下一位置',{exact:true}).count(),0)
   await page.getByRole('button',{name:'停止',exact:true}).first().click();await page.getByText('已停止',{exact:true}).first().waitFor()
   await page.getByRole('button',{name:'启动',exact:true}).first().click();await page.getByText('接收中',{exact:true}).first().waitFor()
+  // Real durable transmission logs, followed by explicit UI fault/late-response checks.
+  assert.equal(await page.getByRole('menuitem',{name:'传输监测',exact:true}).count(),0)
+  assert.equal((await page.request.get(`http://127.0.0.1:${port}/api/v1/kafka-transfer-events`)).status(),403)
+  await page.getByRole('button',{name:'任务日志',exact:true}).first().click()
+  await page.getByRole('dialog',{name:'接收任务日志',exact:true}).waitFor()
+  const logs=page.getByTestId('transfer-table')
+  await logs.locator('tbody tr').first().waitFor()
+  const logged=await page.request.get(`http://127.0.0.1:${port}/demand/api/v1/receiving-tasks/transfer-logs?taskId=${config.task_id}&limit=50`)
+  assert.equal(logged.status(),200)
+  const logData=(await logged.json()).data
+  assert.ok(logData.items.some(r=>r.event_type==='BATCH_STORED'&&r.commit_state==='CONFIRMED'))
+  assert.ok(logData.items.some(r=>r.event_type==='STARTING'))
+  assert.ok(logData.items.every(r=>!('message_value' in r)&&!('encrypted_secrets' in r)))
+  await page.locator('.el-select').filter({has:page.getByRole('combobox',{name:'日志事件',exact:true})}).click();await page.getByRole('option',{name:'批次落库',exact:true}).click();await page.getByRole('button',{name:'查询日志',exact:true}).click()
+  await logs.getByText('批次落库',{exact:true}).first().waitFor()
+  await logs.locator('.el-table__expand-icon').first().click();await page.getByText('已确认',{exact:true}).first().waitFor()
+  await page.screenshot({path:path.join(config.evidence,'receiver-real-transfer-logs.png'),fullPage:true,animations:'disabled'})
+  await page.route('**/demand/api/v1/receiving-tasks/transfer-logs?**',r=>r.fulfill({status:503,contentType:'application/json',body:JSON.stringify({code:503,message:'独立监测读取故障',data:null})}),{times:1})
+  await page.getByTestId('transfer-logs').getByRole('button',{name:'刷新',exact:true}).click();await page.getByTestId('transfer-error').waitFor();assert.equal(await page.getByTestId('transfer-table').count(),0)
+  await page.getByTestId('transfer-logs').getByRole('button',{name:'重试',exact:true}).click();await logs.getByText('批次落库',{exact:true}).first().waitFor()
+  let releaseLog,logFetched
+  const heldLog=new Promise(resolve=>{releaseLog=resolve}),fetchedLog=new Promise(resolve=>{logFetched=resolve})
+  await page.route('**/demand/api/v1/receiving-tasks/transfer-logs?**',async r=>{const response=await r.fetch();logFetched();await heldLog;await r.fulfill({response})},{times:1})
+  await page.getByTestId('transfer-logs').getByRole('button',{name:'刷新',exact:true}).click();await fetchedLog
+  await page.getByRole('dialog',{name:'接收任务日志',exact:true}).locator('.el-drawer__close-btn').click();releaseLog()
+  await page.getByRole('dialog',{name:'接收任务日志',exact:true}).waitFor({state:'hidden'})
+  assert.equal(await page.getByTestId('transfer-table').count(),0)
   assert.deepEqual(errors,[])
   console.log('真实需求方页面通过：订阅打开已有任务、关联失败重试及晚响应隔离；原始内容/完整消息下载、JSONL导出、错误Blob提示、真实进度、停止/启动，无浏览器持久秘密。')
 }catch(error){

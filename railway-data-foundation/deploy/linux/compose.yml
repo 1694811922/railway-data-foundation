@@ -1,0 +1,140 @@
+# Linux single-host deployment. Host networking preserves existing loopback
+# authentication rules; do not change backend guards to allow insecure bridges.
+name: railway-cloud
+x-log: &log
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+x-app: &app
+  network_mode: host
+  restart: unless-stopped
+  read_only: true
+  tmpfs: ["/tmp:size=128m,mode=1777"]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  pids_limit: 256
+  mem_limit: 1536m
+  logging: *log
+  stop_grace_period: 40s
+services:
+  mysql:
+    image: mysql:8.0
+    network_mode: host
+    restart: unless-stopped
+    command: ["--port=13306", "--bind-address=127.0.0.1", "--mysqlx=0", "--innodb-buffer-pool-size=536870912", "--binlog-expire-logs-seconds=604800"]
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql-root
+    volumes:
+      - ./.private/data/mysql:/var/lib/mysql
+      - ./.private/config/mysql-init:/docker-entrypoint-initdb.d:ro
+      - ./.private/config/mysql-root:/run/secrets/mysql-root:ro
+      - ./.private/config/mysql-client.cnf:/run/secrets/mysql-client.cnf:ro
+    healthcheck:
+      test: [CMD-SHELL, "test -f /var/lib/mysql/.railway-init-complete && mysql --defaults-extra-file=/run/secrets/mysql-client.cnf -e 'SELECT 1' >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
+    mem_limit: 2g
+    logging: *log
+    stop_grace_period: 60s
+  kafka:
+    <<: *app
+    image: railway-kafka:cloud-v1
+    build: {context: ../.., dockerfile: deploy/linux/Dockerfile.kafka}
+    mem_limit: 1536m
+    volumes:
+      - ./.private/data/kafka:/var/lib/railway/kafka
+      - ./.private/config/kafka.identity:/run/railway/kafka.identity:ro
+      - ./.private/config/server.properties:/run/railway/server.properties:ro
+      - ./.private/public:/run/railway-public:ro
+      - ./.private/bootstrap:/run/railway-bootstrap:ro
+    healthcheck:
+      test: [CMD, /opt/kafka/entrypoint.sh, health]
+      interval: 20s
+      timeout: 10s
+      retries: 15
+      start_period: 40s
+  kafka-init:
+    <<: *app
+    image: railway-kafka:cloud-v1
+    restart: "no"
+    command: [initialize]
+    depends_on:
+      kafka: {condition: service_healthy}
+    volumes:
+      - ./.private/data/kafka:/var/lib/railway/kafka
+      - ./.private/config/kafka.identity:/run/railway/kafka.identity:ro
+      - ./.private/config/server.properties:/run/railway/server.properties:ro
+      - ./.private/public:/run/railway-public
+      - ./.private/bootstrap:/run/railway-bootstrap
+  foundation:
+    <<: *app
+    image: railway-foundation:cloud-v1
+    build: {context: ../.., dockerfile: deploy/linux/Dockerfile.backend, args: {MODULE: foundation-service}}
+    env_file: [.private/config/foundation.env]
+    environment: {SERVICE_KIND: foundation}
+    depends_on:
+      mysql: {condition: service_healthy}
+      kafka-init: {condition: service_completed_successfully}
+    volumes:
+      - ./.private/public:/run/railway-public:ro
+    healthcheck:
+      test: [CMD, java, -cp, /opt/health, HealthCheck, "http://127.0.0.1:18080/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
+  provider:
+    <<: *app
+    image: railway-provider:cloud-v1
+    build: {context: ../.., dockerfile: deploy/linux/Dockerfile.backend, args: {MODULE: provider-service}}
+    env_file: [.private/config/provider.env]
+    depends_on:
+      foundation: {condition: service_healthy}
+    volumes:
+      - ./.private/data/provider:/var/lib/railway/provider
+    healthcheck:
+      test: [CMD, java, -cp, /opt/health, HealthCheck, "http://127.0.0.1:18081/api/v1/provider/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 15
+      start_period: 60s
+  demand:
+    <<: *app
+    image: railway-demand:cloud-v1
+    build: {context: ../.., dockerfile: deploy/linux/Dockerfile.backend, args: {MODULE: demand-service}}
+    env_file: [.private/config/demand.env]
+    depends_on:
+      foundation: {condition: service_healthy}
+    volumes:
+      - ./.private/data/demand:/var/lib/railway/demand
+    healthcheck:
+      test: [CMD, java, -cp, /opt/health, HealthCheck, "http://127.0.0.1:18082/api/v1/demand/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 15
+      start_period: 60s
+  web:
+    network_mode: host
+    image: railway-web:cloud-v1
+    build: {context: ../.., dockerfile: deploy/linux/Dockerfile.web}
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp, /var/cache/nginx, /var/run]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      foundation: {condition: service_healthy}
+      provider: {condition: service_healthy}
+      demand: {condition: service_healthy}
+    volumes:
+      - ./.private/config/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./.private/tls:/etc/railway-tls:ro
+    healthcheck:
+      test: [CMD-SHELL, "wget -q -O /dev/null http://127.0.0.1:8080/gateway-health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    mem_limit: 256m
+    logging: *log

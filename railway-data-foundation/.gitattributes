@@ -1,0 +1,5 @@
+deploy/linux/*.sh text eol=lf
+deploy/linux/*.py text eol=lf
+deploy/linux/*.yml text eol=lf
+deploy/linux/Dockerfile.* text eol=lf
+.dockerignore text eol=lf

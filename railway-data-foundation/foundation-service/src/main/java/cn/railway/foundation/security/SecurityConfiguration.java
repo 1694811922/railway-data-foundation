@@ -21,6 +21,7 @@ public class SecurityConfiguration {
     static void json(HttpServletResponse response,ObjectMapper mapper,int status,Object body)throws IOException{response.setStatus(status);response.setContentType("application/json;charset=UTF-8");response.setHeader("Cache-Control","no-store");mapper.writeValue(response.getWriter(),body);}
     static boolean technical(HttpServletRequest r){
         String p=r.getRequestURI();return p.equals("/api/v1/access/check")||p.equals("/api/v1/telemetry/reports")
+            ||("POST".equals(r.getMethod())&&p.equals("/api/v1/telemetry/receiver-reports"))
             ||("POST".equals(r.getMethod())&&p.matches("/api/v1/kafka-subscriptions/KSG_[a-f0-9]{32}/receiver-access/check"))
             ||("POST".equals(r.getMethod())&&p.matches("/api/v1/kafka-subscriptions/KSG_[a-f0-9]{32}/consumption-reports"))
             ||("GET".equals(r.getMethod())&&p.matches("/api/v1/capabilities/[^/]+/(runtime|kafka-runtime)")&&r.getHeader("X-Provider-Token")!=null)

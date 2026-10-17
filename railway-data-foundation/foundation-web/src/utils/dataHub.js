@@ -10,6 +10,7 @@ import { loadCapabilityCatalog } from './capabilityCatalog.js'
 import { loadScanCatalog } from './scanCatalog.js'
 import { loadSourceCatalog } from './sourceCatalog.js'
 import { readSourceOverview } from './sourceOverview.js'
+import {demoLifecycleImpact,demoLifecycleChange} from '../mock/resourceLifecycle'
 import { demoComparisonCandidates,demoComparison } from '../mock/schemaComparisonData.js'
 
 const forceMock = import.meta.env.VITE_USE_MOCK === 'true'
@@ -120,18 +121,23 @@ export const hub = {
   saveResource: (form, id) => sourceWrite(() => id ? resourceApi.update(id, form) : resourceApi.create(form), () => {
     if (id ? !isDemoResource(id) : !isDemoSource(form.source_id)) throw new Error('请从演示扫描结果选择来源表')
     const old = demoStore.list('resources').find((r) => r.resource_id === id)
+    if(old?.status==='RETIRED')throw new Error('已退役资源只读')
     if(id && form.version!==old?.version)throw demoResourceConflict()
     return demoStore.put('resources', { ...old, ...form, source_name:demoStore.list('sources').find(s=>s.source_id===form.source_id)?.source_name || '', resource_id: id || nextDemoId('RES'), status: old?.status || 'DRAFT', version: old ? old.version + 1 : 1, updated_at: new Date().toISOString(), _demo: true }, 'resource_id')
   }, id ? isDemoResource(id) : isDemoSource(form.source_id)),
-  publishResource: (id) => sourceWrite(() => resourceApi.publish(id), () => {
+  resourceLifecycleImpact:id=>resourceRead(id,()=>resourceApi.lifecycleImpact(id),()=>demoLifecycleImpact(id)),
+  changeResourceLifecycle:(id,action,body)=>sourceWrite(()=>resourceApi.lifecycle(id,action,body),()=>demoLifecycleChange(id,action,body),isDemoResource(id)),
+  publishResource: (id,body) => sourceWrite(() => resourceApi.publish(id,body), () => {
     if (!isDemoResource(id)) throw new Error('演示资源不存在')
     const current = demoStore.list('resources').find((r) => r.resource_id === id)
+    if(body?.version!==current.version)throw demoResourceConflict()
     if (current.status !== 'DRAFT') throw new Error('仅草稿资源可以发布')
     return demoStore.put('resources', { ...current, status: 'PUBLISHED', version: current.version + 1, updated_at:new Date().toISOString() }, 'resource_id')
   }, isDemoResource(id)),
-  deleteResource: id => sourceWrite(() => resourceApi.delete(id), () => {
+  deleteResource: (id,version) => sourceWrite(() => resourceApi.delete(id,version), () => {
     if(!isDemoResource(id))throw new Error('演示资源不存在')
     const row=demoStore.list('resources').find(item=>item.resource_id===id)
+    if(version!==row.version)throw demoResourceConflict()
     if(row.status!=='DRAFT')throw new Error('仅草稿资源可以删除')
     if(demoStore.list('capabilities').some(item=>item.resource_id===id))throw new Error('资源已关联接口能力，不能删除')
     return demoStore.remove('resources',id,'resource_id')

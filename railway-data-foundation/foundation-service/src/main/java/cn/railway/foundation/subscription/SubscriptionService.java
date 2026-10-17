@@ -69,7 +69,7 @@ public class SubscriptionService {
                 new Event(r.getLong("event_id"),r.getString("grant_id"),r.getString("action"),r.getString("from_status"),r.getString("to_status"),
                         r.getBoolean("whole_topic_acknowledged"),r.getString("operator_name"),r.getString("reason"),r.getInt("version"),time(r,"occurred_at"),r.getString("execution_state")),id);
     }
-    @Transactional
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Grant create(SubscriptionRequest r) {
         gate.newApplication(r.providerSubjectId(),r.demandSubjectId(),r.resourceId(),r.capabilityId());
         if(!Boolean.TRUE.equals(r.wholeTopicAcknowledged())) invalid("必须明确接受完整消息及可访问历史的整主题范围");
@@ -81,7 +81,7 @@ public class SubscriptionService {
         event(id,"CREATE",null,"DRAFT",true,r.reason(),1,now);
         return get(id);
     }
-    @Transactional
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Grant update(String id,SubscriptionUpdateRequest r) {
         var current=locked(id,r.version());
         if(!"DRAFT".equals(current.status())) invalid("仅草稿申请可编辑；确认后必须撤回并重新申请");
@@ -90,7 +90,7 @@ public class SubscriptionService {
                 r.grantName().trim(),r.purpose().trim(),sql(r.validFrom()),sql(r.validUntil()),sql(now),id,r.version());
         event(id,"UPDATE","DRAFT","DRAFT",false,r.reason(),r.version()+1,now);return get(id);
     }
-    @Transactional
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Grant action(String id,String action,SubscriptionActionRequest r) {
         var current=locked(id,r.version());
         String target=TRANSITIONS.getOrDefault(action,Map.of()).get(current.status());
@@ -106,7 +106,7 @@ public class SubscriptionService {
         if("revoke".equals(action))db.update("UPDATE kafka_subscription_execution SET desired_state='REVOKED',execution_state='REVOKE_PENDING',updated_at=? WHERE grant_id=? AND execution_state<>'REVOKED'",sql(now),id);
         event(id,action.toUpperCase(Locale.ROOT),current.status(),target,Boolean.TRUE.equals(r.wholeTopicAcknowledged()),r.reason(),r.version()+1,now);return get(id);
     }
-    @Transactional
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Grant providerReview(String id,String action,cn.railway.foundation.sharing.ProviderReviewRequest r){
         var current=locked(id,r.version());gate.providerReview(current.providerSubjectId(),current.resourceId());
         if(!"REQUIRED".equals(current.providerReviewMode())||!"PENDING".equals(current.status()))invalid("只有待审批且需要提供方确认的申请可操作");
@@ -123,6 +123,7 @@ public class SubscriptionService {
         return get(id);
     }
     Grant locked(String id,int version) {
+        cn.railway.foundation.resource.ResourceLocks.child(db,"kafka_subscription_grant",id);
         var rows=db.query("SELECT version FROM kafka_subscription_grant WHERE grant_id=? FOR UPDATE",(r,n)->r.getInt(1),id);
         if(rows.isEmpty()) throw new BusinessException(ErrorCode.NOT_FOUND,"订阅授权不存在");
         if(rows.get(0)!=version) throw new BusinessException(ErrorCode.VERSION_CONFLICT,"订阅申请已变化，请刷新后重新操作");
@@ -144,13 +145,13 @@ public class SubscriptionService {
         if(confirming&&(!"ENABLED".equals(binding.status())||!"UP".equals(binding.health()))) invalid("请先验证并启用Kafka能力，再确认订阅申请");
     }
     private Binding lockBinding(String provider,String demand,String resource,String capability) {
+        var resources=db.query("SELECT status,source_id FROM data_resource WHERE resource_id=? FOR UPDATE",(r,n)->List.of(r.getString(1),r.getString(2)),resource);
+        if(resources.isEmpty()||!"PUBLISHED".equals(resources.get(0).get(0))) invalid("请选择已发布资源");
         if(provider.equals(demand)) invalid("提供方与需求方必须是不同主体");
         for(String id:new TreeSet<>(List.of(provider,demand))) {
             var rows=db.query("SELECT subject_type,status FROM sharing_subject WHERE subject_id=? FOR UPDATE",(r,n)->List.of(r.getString(1),r.getString(2)),id);
             if(rows.isEmpty()||!rows.get(0).get(0).equals(id.equals(provider)?"PROVIDER":"DEMAND")||!"ENABLED".equals(rows.get(0).get(1))) invalid("共享主体不存在、角色不匹配或已停用");
         }
-        var resources=db.query("SELECT status,source_id FROM data_resource WHERE resource_id=? FOR UPDATE",(r,n)->List.of(r.getString(1),r.getString(2)),resource);
-        if(resources.isEmpty()||!"PUBLISHED".equals(resources.get(0).get(0))) invalid("请选择已发布资源");
         var sources=db.query("SELECT status,provider_subject_id FROM source_system WHERE source_id=? FOR UPDATE",(r,n)->new String[]{r.getString(1),r.getString(2)},resources.get(0).get(1));
         if(sources.isEmpty()||!"ENABLED".equals(sources.get(0)[0])) invalid("资源来源已停用");
         String owner=sources.get(0)[1];if(owner!=null&&!owner.equals(provider))Actor.deny();

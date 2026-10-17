@@ -88,7 +88,7 @@ class SchemaComparisonIntegrationTest extends AuthenticatedApiTest {
     @Test void realAlterRenameAndAttributeDifferencesNeverChangeRegisteredGovernance() throws Exception {
         var response=http.exchange("/api/v1/resources/"+resource+"/fields/event_time",HttpMethod.PUT,
                 new HttpEntity<>(Map.of("business_name","业务时间","business_description","人工维护","time_field",true,"sensitivity_level","敏感","resource_version",1)),JsonNode.class);
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);post("/resources/"+resource+"/publish",null);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);post("/resources/"+resource+"/publish",Map.of("version",db.queryForObject("SELECT version FROM data_resource WHERE resource_id=?",Integer.class,resource),"reason","测试资源发布"));
         capability=post("/capabilities",Map.of("resource_id",resource,"capability_name","结构比较能力","type","REST_API","http_method","GET","endpoint","/containers/events","protocol","HTTP","auth_type","NONE")).path("capability_id").asText();
         provider=subject("PROVIDER");demand=subject("DEMAND");
         var body=new HashMap<String,Object>();body.put("relationship_name","结构比较关系");body.put("provider_subject_id",provider);body.put("demand_subject_id",demand);body.put("resource_id",resource);body.put("capability_id",capability);

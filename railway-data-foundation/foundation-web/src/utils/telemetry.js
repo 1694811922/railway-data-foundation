@@ -1,4 +1,4 @@
-export const collectionPoints={REST_PROVIDER:'接口查询',KAFKA_PRODUCER:'消息生产'}
+export const collectionPoints={REST_PROVIDER:'REST接口',KAFKA_PRODUCER:'Kafka消息'}
 export const outcomes={SUCCESS:'成功',DENIED:'拒绝',ERROR:'异常'}
 export const windowStates={MISSING:'未上报',PARTIAL:'部分上报',CLOSED:'已关闭',UNKNOWN:'未知'}
 export const reasons={COMPLETED:'执行成功',IDENTITY_INVALID:'调用身份无效',RELATIONSHIP_UNAVAILABLE:'共享关系不可用',SUBJECT_UNAVAILABLE:'参与主体已停用',RELATIONSHIP_INACTIVE:'共享关系未启用',RELATIONSHIP_EXPIRED:'授权已过期',POLICY_UNAVAILABLE:'访问策略不可用',FIELDS_FORBIDDEN:'字段超出授权范围',TIME_FORBIDDEN:'时间超出授权范围',CAPABILITY_UNAVAILABLE:'接口能力不可用',INVALID_REQUEST:'请求参数无效',OPERATOR_FORBIDDEN:'操作身份无效',SOURCE_UNAVAILABLE:'业务源连接失败',CONTROL_UNAVAILABLE:'授权服务不可用',SERIALIZATION_ERROR:'响应输出失败',INTERNAL_ERROR:'执行异常',KAFKA_UNAVAILABLE:'消息服务器不可用'}

@@ -8,8 +8,10 @@ import { subscriptionApi } from '../../api/subscription'
 import { session, explicitDemo } from '../../utils/sessionState'
 import { receivingStates, receivingColors, receivingPage, receivingPayload, readablePayload, takeReceivingDraft, clearReceivingDraft, receivingReadGate } from '../../utils/receiving'
 import { displayTime } from '../../utils/time'
+import ReceivingTransferLogs from '../../components/ReceivingTransferLogs.vue'
 import ReceivingProgress from '../../components/ReceivingProgress.vue'
 import { receivingGrant, resolveReceivingEntry } from '../../utils/receivingEntry'
+const logTask=ref(null)
 const progressTask=ref(null)
 const exporting=ref(false),exportError=ref(''),confirmingExport=ref(false)
 let downloadController,downloadVersion=0
@@ -161,9 +163,10 @@ onBeforeUnmount(() => { cancelDownload();clearInterval(timer); clearSecrets(); p
       <el-table-column label="运行状态" width="120"><template #default="{row}"><el-tag :type="receivingColors[row.runtime_state] || 'info'">{{receivingStates[row.runtime_state] || row.runtime_state}}</el-tag></template></el-table-column>
       <el-table-column prop="received_count" label="已落库消息" width="120"/><el-table-column label="最近接收时间" min-width="175"><template #default="{row}">{{displayTime(row.last_received_at)}}</template></el-table-column>
       <el-table-column prop="error_reason" label="错误原因" min-width="210" show-overflow-tooltip/>
-      <el-table-column label="操作" width="390" fixed="right"><template #default="{row}"><el-button link type="primary" @click="showDetail(row)">查看数据</el-button><el-button link type="primary" @click="progressTask=row">接收进度</el-button><el-button v-if="row.desired_state==='STOPPED'" link type="primary" :disabled="busy||row.runtime_state==='STOPPING'" @click="action(row,'start')">启动</el-button><el-button v-else link type="danger" :disabled="busy" @click="action(row,'stop')">停止</el-button><el-button v-if="row.runtime_state==='BLOCKED'" link type="primary" :disabled="busy" @click="action(row,'resume')">恢复</el-button><el-button v-if="row.runtime_state==='STOPPED'" link type="primary" :disabled="busy" @click="updateCredentials(row)">更新凭据</el-button></template></el-table-column>
+      <el-table-column label="操作" width="480" fixed="right"><template #default="{row}"><el-button link type="primary" @click="showDetail(row)">查看数据</el-button><el-button link type="primary" @click="progressTask=row">接收进度</el-button><el-button link type="primary" @click="logTask=row">任务日志</el-button><el-button v-if="row.desired_state==='STOPPED'" link type="primary" :disabled="busy||row.runtime_state==='STOPPING'" @click="action(row,'start')">启动</el-button><el-button v-else link type="danger" :disabled="busy" @click="action(row,'stop')">停止</el-button><el-button v-if="row.runtime_state==='BLOCKED'" link type="primary" :disabled="busy" @click="action(row,'resume')">恢复</el-button><el-button v-if="row.runtime_state==='STOPPED'" link type="primary" :disabled="busy" @click="updateCredentials(row)">更新凭据</el-button></template></el-table-column>
     </el-table><el-pagination v-model:current-page="page" v-model:page-size="size" :page-sizes="[10,20,50]" :total="total" layout="total,sizes,prev,pager,next" @change="load"/>
   </el-card>
+  <el-drawer :model-value="!!logTask" title="接收任务日志" size="90%" destroy-on-close @close="logTask=null"><ReceivingTransferLogs v-if="logTask" :key="logTask.task_id" :task-id="logTask.task_id" /></el-drawer>
   <ReceivingProgress :task="progressTask" @close="progressTask=null" />
   <el-dialog v-model="visible" :title="updating?'更新接收凭据':'创建接收任务'" width="660px" :close-on-click-modal="false" :show-close="!busy" @closed="clearSecrets();gates.candidates.invalidate();gates.create.invalidate()">
     <el-alert v-if="createError" :title="createError" type="error" :closable="false"><el-button v-if="selectionFailed" link @click="selectGrant(form.grant_id)">重试关联</el-button></el-alert>

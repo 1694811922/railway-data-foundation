@@ -1,5 +1,7 @@
 # 共享运行摘要接收与查询接口
 
+> 最新管理员页面合并为“传输监测”。新增只读`GET /api/v1/transfer-monitor/events`及底座V19/需求方V4耗时字段，见[统一监测接口与口径](TRANSFER_MONITOR_GUIDE.md)。下文原事件、追踪、分钟窗口接口继续兼容，普通角色权限未扩大。
+
 更新：2026-10-06。V0.4追加V10迁移，底座接收、去重、事件查询和分钟统计已接入Provider自动采集、异步补报及中文运行监管页面。单Provider真实REST查询与持久摘要/计量已核对，Kafka发送回执由嵌入式Broker验证；没有实际采集的对象仍为未知。详见[交付记录](RUNTIME_TELEMETRY_CHANGELOG.md)。
 
 接口使用统一`{code,message,data}`响应，`code=0`表示成功。以下全部是治理和计量摘要，不接收业务行、令牌、连接密码、过滤值、SQL或自由格式异常文本。

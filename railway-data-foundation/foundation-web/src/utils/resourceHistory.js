@@ -1,5 +1,5 @@
 import {parseUtcTime} from './time.js'
-export const historyActions={BASELINE:'启用时基线',CREATE:'资源登记',RESOURCE_UPDATE:'资源信息修改',FIELD_UPDATE:'字段维护',PUBLISH:'资源发布'}
+export const historyActions={BASELINE:'启用时基线',CREATE:'资源登记',RESOURCE_UPDATE:'资源信息修改',FIELD_UPDATE:'字段维护',PUBLISH:'资源发布',UNPUBLISH:'资源下架',REPUBLISH:'重新发布',RETIRE:'资源退役'}
 export const resourceProperties={resource_name:'资源名称',business_description:'业务描述',owner_department:'责任单位',security_level:'安全等级',update_mode:'更新方式',status:'资源状态'}
 export const historyFieldProperties={data_type:'数据类型',primary_key:'主键',technical_comment:'技术注释',ordinal_position:'字段顺序',business_name:'业务名称',business_description:'业务说明',time_field:'时间字段',sensitivity_level:'敏感等级'}
 const invalid=()=>{throw new Error('版本历史数据不完整或与当前资源不一致，请重试')}
@@ -19,7 +19,7 @@ function snapshotValid(snapshot,resource,version){
   const value=snapshot.resource
   if(snapshot.entry.version!==version || !value || value.resource_id!==resource.resource_id || value.version!==version
     || value.source_id!==resource.source_id || value.scan_task_id!==resource.scan_task_id || value.schema_name!==resource.schema_name || value.physical_table!==resource.physical_table
-    || !Array.isArray(snapshot.fields) || !['DRAFT','PUBLISHED'].includes(value.status))invalid()
+    || !Array.isArray(snapshot.fields) || !['DRAFT','PUBLISHED','OFFLINE','RETIRED'].includes(value.status))invalid()
   for(const key of [...Object.keys(resourceProperties),'source_name'])if(typeof value[key]!=='string')invalid()
   const names=new Set(),positions=new Set()
   for(const field of snapshot.fields){

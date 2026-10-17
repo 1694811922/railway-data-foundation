@@ -35,7 +35,7 @@ class ResourceHistoryIntegrationTest extends AuthenticatedApiTest {
         var body=new HashMap<String,Object>();var current=get("");
         for(var key:List.of("resource_name","source_id","scan_task_id","schema_name","physical_table","business_description","owner_department","security_level","update_mode"))body.put(key,current.path(key).asText());
         body.put("version",1);body.put("resource_name","新的资源名称");ok(http.exchange("/api/v1/resources/"+resource,HttpMethod.PUT,new HttpEntity<>(body),JsonNode.class));
-        ok(edit(2,"业务发生时间"));ok(http.postForEntity("/api/v1/resources/"+resource+"/publish",null,JsonNode.class));
+        ok(edit(2,"业务发生时间"));ok(http.postForEntity("/api/v1/resources/"+resource+"/publish",Map.of("version",db.queryForObject("SELECT version FROM data_resource WHERE resource_id=?",Integer.class,resource),"reason","测试资源发布"),JsonNode.class));
         assertThat(get("/versions").path("total").asInt()).isEqualTo(4);
         assertThat(get("/versions/2").path("snapshot").path("entry").path("action").asText()).isEqualTo("RESOURCE_UPDATE");
         var third=get("/versions/3");assertThat(third.path("snapshot").path("entry").path("changed_field").asText()).isEqualTo("event_time");
@@ -81,7 +81,7 @@ class ResourceHistoryIntegrationTest extends AuthenticatedApiTest {
         ok(edit(1,"新维护"));db.update("DELETE FROM resource_revision WHERE resource_id=? AND version=1",resource);
         assertThat(get("/versions/2").path("previous_snapshot").isNull()).isTrue();
         assertThat(http.getForEntity("/api/v1/resources/"+resource+"/versions/1",JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
-        ok(http.exchange("/api/v1/resources/"+resource,HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class));
+        ok(http.exchange("/api/v1/resources/"+resource+"?version="+db.queryForObject("SELECT version FROM data_resource WHERE resource_id=?",Integer.class,resource),HttpMethod.DELETE,HttpEntity.EMPTY,JsonNode.class));
         assertThat(db.queryForObject("SELECT COUNT(*) FROM resource_revision WHERE resource_id=?",Integer.class,resource)).isZero();
         assertThat(http.getForEntity("/api/v1/resources/"+resource+"/versions",JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }

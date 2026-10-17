@@ -51,7 +51,7 @@ try {
   } }))
   fixture.resource_id = resource.resource_id;await record()
   await data(await page.request.put(api+'/resources/'+resource.resource_id+'/fields/event_time',{data:{business_name:'事件时间',business_description:'共享时间范围',time_field:true,sensitivity_level:'内部',resource_version:resource.version}}))
-  await data(await page.request.post(api + '/resources/' + resource.resource_id + '/publish'))
+  await data(await page.request.post(api + '/resources/' + resource.resource_id + '/publish',{data:{version:resource.version,reason:'独立测试发布'}}))
   await page.goto('http://127.0.0.1:5176/', { waitUntil: 'networkidle' })
   await page.getByRole('button', { name: '进入平台' }).click()
   await page.goto('http://127.0.0.1:5176/capabilities?resource=' + resource.resource_id + '&create=1', { waitUntil: 'networkidle' })

@@ -46,7 +46,7 @@ function read() {
 }
 export const demoStore = {
   list: (name) => read()[name] || [],
-  put(name, entry, idKey) {
+  put(name, entry, idKey, lifecycle) {
     const state = read()
     const index = state[name].findIndex((row) => row[idKey] === entry[idKey])
     if(name==='resources'){
@@ -54,7 +54,7 @@ export const demoStore = {
       state.resource_fields[entry.resource_id] ||= entry.physical_table==='container_event'?structuredClone(state.fields || demoSeed.fields):[]
       state.resource_versions[entry.resource_id] ||= []
       state.resource_versions[entry.resource_id].push(demoVersionSnapshot(entry,state.resource_fields[entry.resource_id],
-        !previous?'CREATE':previous.status==='DRAFT'&&entry.status==='PUBLISHED'?'PUBLISH':'RESOURCE_UPDATE',null,entry.updated_at))
+        lifecycle?.action||(!previous?'CREATE':previous.status==='DRAFT'&&entry.status==='PUBLISHED'?'PUBLISH':'RESOURCE_UPDATE'),null,entry.updated_at,lifecycle?.reason||''))
     }
     if (index < 0) state[name].unshift(entry)
     else state[name][index] = entry
@@ -82,6 +82,7 @@ export const demoStore = {
     const resource = state.resources.find(r => r.resource_id === id)
     const field = state.resource_fields[id]?.find(f => f.field_name === fieldName)
     if (!resource || !field) throw new Error('演示资源字段不存在，请重新选择资源')
+    if(resource.status==='RETIRED')throw new Error('已退役资源只读')
     if(changes.resource_version!==resource.version)throw demoResourceConflict()
     const {resource_version,...attributes}=changes
     Object.assign(field, attributes)

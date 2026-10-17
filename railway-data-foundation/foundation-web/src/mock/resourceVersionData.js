@@ -1,7 +1,7 @@
 // Explicit demo snapshots only. No fabricated versions before the initial baseline.
-export function demoVersionSnapshot(resource,fields,action='BASELINE',changed_field=null,recorded_at=resource.updated_at){
+export function demoVersionSnapshot(resource,fields,action='BASELINE',changed_field=null,recorded_at=resource.updated_at,operation_reason=''){
   const {_demo,...saved}=resource
-  return {entry:{resource_id:resource.resource_id,version:resource.version,action,changed_field,recorded_at},resource:structuredClone(saved),
+  return {entry:{resource_id:resource.resource_id,version:resource.version,action,changed_field,recorded_at,operation_reason,operator_name:operation_reason?'演示管理员':''},resource:structuredClone(saved),
     fields:fields.map(field=>Object.fromEntries(['field_name','data_type','primary_key','technical_comment','ordinal_position','business_name','business_description','time_field','sensitivity_level','resource_version'].map(key=>[key,
       key==='resource_version'?resource.version:key==='ordinal_position'?(field[key]??fields.indexOf(field)+1):field[key]??(['primary_key','time_field'].includes(key)?false:'')])))}
 }

@@ -8,8 +8,15 @@ export const resourceApi = {
   compareSchema: (id,scanTaskId) => request.get(`/resources/${encodeURIComponent(id)}/schema-comparison`,{params:{scanTaskId}}),
   create: (body) => request.post('/resources', body),
   update: (id, body) => request.put(`/resources/${encodeURIComponent(id)}`, body),
-  publish: (id) => request.post(`/resources/${encodeURIComponent(id)}/publish`),
+  publish: (id,body) => request.post(`/resources/${encodeURIComponent(id)}/publish`,body),
+  lifecycleImpact: id=>request.get(`/resources/${encodeURIComponent(id)}/lifecycle-impact`,{quiet:true}),
+  lifecycle: async(id,action,body)=>{
+    if(action!=='publish')return request.post(`/resources/${encodeURIComponent(id)}/${action}`,body)
+    const resource=await request.post(`/resources/${encodeURIComponent(id)}/publish`,body)
+    let impact=null;try{impact=await resourceApi.lifecycleImpact(id)}catch{/* The write succeeded; do not misreport a later read failure as rollback. */}
+    return {resource,impact}
+  },
   fields: (id) => request.get(`/resources/${encodeURIComponent(id)}/fields`),
   updateField: (id, name, body) => request.put(`/resources/${encodeURIComponent(id)}/fields/${encodeURIComponent(name)}`, body),
-  delete: (id) => request.delete(`/resources/${encodeURIComponent(id)}`),
+  delete: (id,version) => request.delete(`/resources/${encodeURIComponent(id)}`,{params:{version}}),
 }

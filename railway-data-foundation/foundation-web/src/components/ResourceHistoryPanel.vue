@@ -55,6 +55,7 @@ onMounted(load);onBeforeUnmount(()=>{active=false;++listEpoch;++detailEpoch})
         <h3>V{{ selected }} 快照 <el-tag>{{ historyActions[detail.snapshot.entry.action] }}</el-tag></h3>
         <el-alert v-if="detail.snapshot.entry.action==='BASELINE'" title="此版本为启用历史留存时的状态，更早版本未留存。" type="info" :closable="false" show-icon data-testid="history-baseline" />
         <el-descriptions :column="2" border data-testid="history-resource">
+          <el-descriptions-item label="操作原因">{{detail.snapshot.entry.operation_reason||'未记录'}}</el-descriptions-item><el-descriptions-item label="操作人">{{detail.snapshot.entry.operator_name||'历史未记录'}}</el-descriptions-item>
           <el-descriptions-item v-for="(label,key) in resourceProperties" :key="key" :label="label"><StatusTag v-if="key==='status'" :value="detail.snapshot.resource[key]" /><template v-else>{{ detail.snapshot.resource[key] }}</template></el-descriptions-item>
           <el-descriptions-item label="来源系统">{{ detail.snapshot.resource.source_name }}</el-descriptions-item>
           <el-descriptions-item label="物理表">{{ detail.snapshot.resource.schema_name }}.{{ detail.snapshot.resource.physical_table }}</el-descriptions-item>

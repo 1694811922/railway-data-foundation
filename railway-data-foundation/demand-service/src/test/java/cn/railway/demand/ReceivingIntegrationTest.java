@@ -19,7 +19,7 @@ import java.time.temporal.ChronoUnit;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 @EnabledIfEnvironmentVariable(named="RUN_DEMAND_TESTS",matches="true")
-@SpringBootTest(webEnvironment=SpringBootTest.WebEnvironment.RANDOM_PORT,properties={"demand.worker.enabled=false","DEMAND_DB_NAME=demand_receiver_test"})
+@SpringBootTest(webEnvironment=SpringBootTest.WebEnvironment.RANDOM_PORT,properties={"demand.worker.enabled=false","demand.monitor.enabled=false","DEMAND_DB_NAME=demand_receiver_test"})
 class ReceivingIntegrationTest {
     @Autowired JdbcTemplate db;@Autowired DurableInbox inbox;@Autowired ReceivingService service;@Autowired SecretVault vault;@Autowired TestRestTemplate http;@Autowired ObjectMapper json;@Autowired PlatformTransactionManager manager;
     @MockitoBean FoundationClient foundation;@MockitoBean KafkaConnections kafka;
@@ -138,4 +138,126 @@ class ReceivingIntegrationTest {
         var h=new HttpHeaders();h.set("X-Test-Login","test-login");var response=http.exchange("/api/v1/receiving-tasks/"+task+"/messages/export",HttpMethod.GET,new HttpEntity<>(h),JsonNode.class);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);assertThat(response.getHeaders().containsKey("Content-Disposition")).isFalse();assertThat(checks.get()).isEqualTo(2);assertThat(response.getBody().path("data").isNull()).isTrue();
     }
+
+    @Autowired TransferLogs transferLogs;
+    @Test void transferBatchSeparatesDurableStorageDedupAndOffsetAcknowledgement(){
+        String batch=UUID.randomUUID().toString();
+        inbox.save(task,"cluster:topic",List.of(record(0,"private-payload".getBytes())),now,now,batch);
+        var data=transferLogs.page(subject,task,"BATCH_STORED",null,null,null,20,0);
+        var first=(Map<?,?>)((List<?>)data.get("items")).get(0);
+        assertThat(first.get("inserted_count")).isEqualTo(1);assertThat(first.get("duplicate_count")).isEqualTo(0);assertThat(first.get("commit_state")).isEqualTo("UNKNOWN");
+        assertThat(service.stringify(data)).doesNotContain(password,token,"private-payload","message_value","encrypted_secrets");
+        inbox.offsetResult(task,batch,Map.of(0,1L),false);
+        assertThat(service.stringify(transferLogs.page(subject,task,"BATCH_STORED",null,null,null,20,0))).contains("UNCONFIRMED");
+        inbox.offsetResult(task,batch,Map.of(0,1L),true);
+        assertThat(service.stringify(transferLogs.page(subject,task,"BATCH_STORED",null,null,null,20,0))).contains("CONFIRMED");
+        inbox.save(task,"cluster:topic",List.of(record(0,"private-payload".getBytes())),now,now);
+        var reread=(Map<?,?>)((List<?>)transferLogs.page(subject,task,"BATCH_STORED",null,null,null,1,0).get("items")).get(0);
+        assertThat(reread.get("inserted_count")).isEqualTo(0);assertThat(reread.get("duplicate_count")).isEqualTo(1);
+    }
+    @Test void rollbackAndInconsistentMessagesCannotLeaveSuccessfulBatchLogs(){
+        new TransactionTemplate(manager).executeWithoutResult(s->{inbox.save(task,"cluster:topic",List.of(record(0,new byte[]{1})),now,now);s.setRollbackOnly();});
+        assertThat(transferLogs.page(subject,task,null,null,null,null,20,0).get("total")).isEqualTo(0L);
+        inbox.save(task,"cluster:topic",List.of(record(0,new byte[]{1})),now,now);
+        assertThatThrownBy(()->inbox.save(task,"cluster:topic",List.of(record(1,new byte[]{2}),record(0,new byte[]{3})),now,now)).isInstanceOf(ReceiverFailure.class);
+        assertThat(transferLogs.page(subject,task,"BATCH_STORED",null,null,null,20,0).get("total")).isEqualTo(1L);
+    }
+    @Test void statusTransitionsAreRecordedOnceAndPreserveRealOperator(){
+        inbox.state(task,"RUNNING","","RECEIVER_READY");assertThat(transferLogs.page(subject,task,null,null,null,null,20,0).get("total")).isEqualTo(0L);
+        inbox.state(task,"RETRYING","连接失败","RECEIVER_RETRYING");inbox.state(task,"RETRYING","连接失败","RECEIVER_RETRYING");
+        assertThat(transferLogs.page(subject,task,null,null,null,null,20,0).get("total")).isEqualTo(1L);
+        service.action(task,subject,"stop",1,"real-account-id");inbox.stopped(task);inbox.stopped(task);
+        assertThat(transferLogs.page(subject,task,"STOPPED",null,null,null,20,0).get("total")).isEqualTo(1L);
+        var h=new HttpHeaders();h.set("X-Test-Login","test-login");h.set("X-CSRF-TOKEN","test-csrf");
+        http.exchange("/api/v1/receiving-tasks/"+task+"/start",HttpMethod.POST,new HttpEntity<>(Map.of("version",2),h),JsonNode.class);
+        assertThat(service.stringify(transferLogs.page(subject,task,"STOP_REQUESTED",null,null,null,20,0))).contains("real-account-id");
+        assertThat(service.stringify(transferLogs.page(subject,task,"START_REQUESTED",null,null,null,20,0))).contains("account");
+    }
+    @Test void summaryRetriesAndAcknowledgementAreDistinctDurableEvents(){
+        inbox.save(task,"cluster:topic",List.of(record(0,new byte[]{1})),now,now);
+        String report=db.queryForObject("SELECT report_id FROM receiving_outbox WHERE task_id=?",String.class,task);
+        inbox.reportResult(report,"PENDING");inbox.reportResult(report,"SENT");inbox.reportResult(report,"SENT");
+        assertThat(db.queryForObject("SELECT attempts FROM receiving_outbox WHERE report_id=?",Integer.class,report)).isEqualTo(2);
+        assertThat(transferLogs.page(subject,task,"REPORT_SENT",null,null,null,20,0).get("total")).isEqualTo(1L);
+        assertThat(transferLogs.page(subject,task,"REPORT_RETRYING",null,null,null,20,0).get("total")).isEqualTo(1L);
+        assertThat(service.stringify(transferLogs.page(subject,task,"BATCH_STORED",null,null,null,20,0))).contains("SENT");
+    }
+    @Test void logPaginationFiltersAndHttpCountsAreSubjectScoped(){
+        inbox.state(task,"RETRYING","连接失败","RECEIVER_RETRYING");inbox.state(task,"BLOCKED","处理失败","RETRIES_EXHAUSTED");
+        assertThat(transferLogs.page(subject,task,null,null,null,null,1,1).get("total")).isEqualTo(2L);
+        assertThat(transferLogs.page(subject,task,null,"ERROR",null,null,20,0).get("total")).isEqualTo(1L);
+        assertThat(transferLogs.page("other",null,null,null,null,null,20,0).get("total")).isEqualTo(0L);
+        assertThatThrownBy(()->transferLogs.page("other",task,null,null,null,null,20,0)).isInstanceOf(ReceiverFailure.class);
+        String path="/api/v1/receiving-tasks/transfer-logs";
+        assertThat(http.getForEntity(path,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        var h=new HttpHeaders();h.set("X-Test-Login","test-login");h.set("X-Test-Subject","other");
+        assertThat(http.exchange(path+"?taskId="+task,HttpMethod.GET,new HttpEntity<>(h),JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(http.exchange(path,HttpMethod.GET,new HttpEntity<>(h),JsonNode.class).getBody().path("data").path("total").asInt()).isZero();
+        h.set("X-Test-Subject",subject);
+        for(String query:List.of("limit=0","limit=51","offset=-1","eventType=SQL","outcome=FAKE","from=bad","from=2026-01-02T00:00:00Z&until=2026-01-01T00:00:00Z"))assertThat(http.exchange(path+"?"+query,HttpMethod.GET,new HttpEntity<>(h),JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+    @Test void startupDoesNotInventPastTransfersButRecordsRecovery(){
+        assertThat(transferLogs.page(subject,task,null,null,null,null,20,0).get("total")).isEqualTo(0L);
+        inbox.recover();inbox.recover();
+        assertThat(transferLogs.page(subject,task,"STARTING",null,null,null,20,0).get("total")).isEqualTo(1L);
+        assertThat(transferLogs.page(subject,task,"BATCH_STORED",null,null,null,20,0).get("total")).isEqualTo(0L);
+    }
+
+    @Test void monitorQueueJoinsLogAndMessageTransactionAndSurvivesRetry(){
+        var batch=UUID.randomUUID().toString();
+        new TransactionTemplate(manager).executeWithoutResult(status->{inbox.save(task,"cluster:topic",List.of(record(0,new byte[]{1})),now,now,batch);status.setRollbackOnly();});
+        assertThat(db.queryForObject("SELECT COUNT(*) FROM receiving_monitor_outbox q JOIN receiving_transfer_log l ON l.log_id=q.log_id WHERE l.task_id=?",Long.class,task)).isZero();
+        inbox.save(task,"cluster:topic",List.of(record(0,new byte[]{1})),now,now,batch);
+        var environment=new org.springframework.mock.env.MockEnvironment().withProperty("DEMAND_TELEMETRY_TOKEN","x".repeat(43));var reporter=new MonitorReporter(db,json,foundation,environment);
+        when(foundation.monitor(anyString(),anyString())).thenThrow(new ReceiverFailure(503,"offline"));reporter.flush();
+        assertThat(db.queryForObject("SELECT q.report_state FROM receiving_monitor_outbox q JOIN receiving_transfer_log l ON l.log_id=q.log_id WHERE l.task_id=?",String.class,task)).isEqualTo("PENDING");
+        String event=db.queryForObject("SELECT q.event_id FROM receiving_monitor_outbox q JOIN receiving_transfer_log l ON l.log_id=q.log_id WHERE l.task_id=?",String.class,task);
+        doAnswer(call->{var body=json.readTree((String)call.getArgument(1));assertThat(body.toString()).doesNotContain(password,token,"message_value","encrypted_secrets","subject_id");assertThat(body.path("events").get(0).path("event_id").asText()).isEqualTo(event);return json.valueToTree(Map.of("event_ids",List.of(event),"accepted",1,"duplicates",0));}).when(foundation).monitor(anyString(),anyString());
+        db.update("UPDATE receiving_monitor_outbox q JOIN receiving_transfer_log l ON l.log_id=q.log_id SET q.next_attempt_at=UTC_TIMESTAMP(3) WHERE l.task_id=?",task);reporter.flush();reporter.flush();
+        assertThat(db.queryForObject("SELECT q.report_state FROM receiving_monitor_outbox q JOIN receiving_transfer_log l ON l.log_id=q.log_id WHERE l.task_id=?",String.class,task)).isEqualTo("SENT");
+        assertThat(db.queryForObject("SELECT COUNT(*) FROM receiving_transfer_log WHERE task_id=?",Long.class,task)).isEqualTo(1);assertThat(service.get(task,subject).get("received_count")).isEqualTo(1L);
+    }
+    @Test void monitorPermanentRejectionIsQuarantinedWithoutDeletingLogOrMessage(){
+        inbox.save(task,"cluster:topic",List.of(record(0,new byte[]{1})),now,now);
+        var reporter=new MonitorReporter(db,json,foundation,new org.springframework.mock.env.MockEnvironment().withProperty("DEMAND_TELEMETRY_TOKEN","x".repeat(43)));
+        when(foundation.monitor(anyString(),anyString())).thenThrow(new ReceiverFailure(409,"conflict"));reporter.flush();
+        assertThat(db.queryForObject("SELECT q.report_state FROM receiving_monitor_outbox q JOIN receiving_transfer_log l ON l.log_id=q.log_id WHERE l.task_id=?",String.class,task)).isEqualTo("QUARANTINED");assertThat(service.get(task,subject).get("received_count")).isEqualTo(1L);
+        var disabled=new MonitorReporter(db,json,foundation,new org.springframework.mock.env.MockEnvironment());clearInvocations(foundation);disabled.flush();verifyNoInteractions(foundation);
+    }
+    @Test void migrationBackfillQueuesRealOldLogsWithoutInventingEvents(){
+        inbox.save(task,"cluster:topic",List.of(record(0,new byte[]{1})),now,now);
+        db.update("DELETE q FROM receiving_monitor_outbox q JOIN receiving_transfer_log l ON l.log_id=q.log_id WHERE l.task_id=?",task);
+        db.update("INSERT INTO receiving_monitor_outbox(log_id,event_id) SELECT log_id,UUID() FROM receiving_transfer_log WHERE task_id=?",task);
+        assertThat(db.queryForObject("SELECT COUNT(*) FROM receiving_monitor_outbox q JOIN receiving_transfer_log l ON l.log_id=q.log_id WHERE l.task_id=?",Long.class,task)).isEqualTo(1L);
+        assertThat(db.queryForObject("SELECT COUNT(*) FROM receiving_transfer_log WHERE task_id=?",Long.class,task)).isEqualTo(1L);
+    }
+
+    @Test void actualHttpDisconnectAndReporterRestartReplaySamePersistentEvent()throws Exception{
+        inbox.save(task,"cluster:topic",List.of(record(0,new byte[]{1})),now,now);
+        int port;try(var socket=new java.net.ServerSocket(0,1,java.net.InetAddress.getLoopbackAddress())){port=socket.getLocalPort();}
+        var environment=new org.springframework.mock.env.MockEnvironment().withProperty("DEMAND_TELEMETRY_TOKEN","x".repeat(43)).withProperty("DEMAND_FOUNDATION_URL","http://127.0.0.1:"+port);
+        new MonitorReporter(db,json,new FoundationClient(environment,json),environment).flush();
+        String event=db.queryForObject("SELECT q.event_id FROM receiving_monitor_outbox q JOIN receiving_transfer_log l ON l.log_id=q.log_id WHERE l.task_id=?",String.class,task);
+        assertThat(db.queryForObject("SELECT q.report_state FROM receiving_monitor_outbox q JOIN receiving_transfer_log l ON l.log_id=q.log_id WHERE l.task_id=?",String.class,task)).isEqualTo("PENDING");
+        var observed=new java.util.concurrent.atomic.AtomicReference<String>();var header=new java.util.concurrent.atomic.AtomicReference<String>();
+        var server=com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1",port),0);
+        server.createContext("/api/v1/telemetry/receiver-reports",exchange->{try{var body=new String(exchange.getRequestBody().readAllBytes(),java.nio.charset.StandardCharsets.UTF_8);observed.set(body);header.set(exchange.getRequestHeaders().getFirst("X-Receiver-Telemetry-Token"));var id=json.readTree(body).path("events").get(0).path("event_id").asText();byte[] reply=json.writeValueAsBytes(Map.of("code",0,"data",Map.of("event_ids",List.of(id),"accepted",0,"duplicates",1)));exchange.getResponseHeaders().set("Content-Type","application/json");exchange.sendResponseHeaders(200,reply.length);exchange.getResponseBody().write(reply);}finally{exchange.close();}});
+        server.start();try{
+            db.update("UPDATE receiving_monitor_outbox q JOIN receiving_transfer_log l ON l.log_id=q.log_id SET q.next_attempt_at=UTC_TIMESTAMP(3) WHERE l.task_id=?",task);
+            new MonitorReporter(db,json,new FoundationClient(environment,json),environment).flush();
+            assertThat(db.queryForObject("SELECT q.report_state FROM receiving_monitor_outbox q JOIN receiving_transfer_log l ON l.log_id=q.log_id WHERE l.task_id=?",String.class,task)).isEqualTo("SENT");
+            assertThat(observed.get()).contains(event).doesNotContain(password,token,"message_value","subject_id");assertThat(header.get()).isEqualTo("x".repeat(43));
+            assertThat(db.queryForObject("SELECT COUNT(*) FROM receiving_transfer_log WHERE task_id=?",Long.class,task)).isEqualTo(1);
+        }finally{server.stop(0);}
+    }
+    @Test void measuredStorageDurationIsTechnicalAndDoesNotAlterCheckpoint(){
+        String batch=UUID.randomUUID().toString();inbox.save(task,"cluster:topic",List.of(record(0,new byte[]{1})),now,now,batch);
+        inbox.offsetResult(task,batch,Map.of(0,1L),false,31L);
+        assertThat(db.queryForObject("SELECT storage_duration_ms FROM receiving_transfer_log WHERE task_id=? AND event_type='OFFSET_UNCONFIRMED'",Long.class,task)).isEqualTo(31);
+        assertThat(db.queryForObject("SELECT next_offset FROM receiving_checkpoint WHERE task_id=?",Long.class,task)).isEqualTo(1);
+        assertThat(db.queryForObject("SELECT COUNT(*) FROM received_message WHERE task_id=?",Long.class,task)).isEqualTo(1);
+        var env=new org.springframework.mock.env.MockEnvironment().withProperty("DEMAND_TELEMETRY_TOKEN","x".repeat(43));var reporter=new MonitorReporter(db,json,foundation,env);
+        doAnswer(call->{var e=json.readTree((String)call.getArgument(1)).path("events").get(0);if("OFFSET_UNCONFIRMED".equals(e.path("event_type").asText()))assertThat(e.path("storage_duration_ms").asInt()).isEqualTo(31);else assertThat(e.has("storage_duration_ms")).isFalse();return json.valueToTree(Map.of("event_ids",List.of(e.path("event_id").asText()),"accepted",1,"duplicates",0));}).when(foundation).monitor(anyString(),anyString());reporter.flush();
+    }
+
 }

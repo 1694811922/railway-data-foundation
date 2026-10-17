@@ -31,7 +31,7 @@ try{
     const current=await request(`/resources/${resource.resource_id}`)
     await request(`/resources/${resource.resource_id}/fields/${name}`,'PUT',{business_name:label,business_description:'授权联调',time_field:name==='event_time',sensitivity_level:'内部',resource_version:current.version})
   }
-  await request(`/resources/${resource.resource_id}/publish`,'POST')
+  await request(`/resources/${resource.resource_id}/publish`,'POST',{version:resource.version,reason:'独立测试发布'})
   const capability=await request('/capabilities','POST',{resource_id:resource.resource_id,capability_name:prefix+'capability_'+run,type:'REST_API',http_method:'GET',endpoint:'/containers/events',protocol:'HTTP',auth_type:'NONE',description:'可信身份与策略执行联调'})
   fixture.capability_id=capability.capability_id;await record()
   await request(`/capabilities/${capability.capability_id}/verify`,'POST');await request(`/capabilities/${capability.capability_id}/enable`,'POST')

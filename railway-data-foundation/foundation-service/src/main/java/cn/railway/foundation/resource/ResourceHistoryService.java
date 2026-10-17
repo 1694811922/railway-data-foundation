@@ -23,7 +23,7 @@ import java.util.List;
 @Service
 public class ResourceHistoryService {
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
-    public record Entry(String resourceId,int version,String action,String changedField,LocalDateTime recordedAt) {}
+    public record Entry(String resourceId,int version,String action,String changedField,LocalDateTime recordedAt,String operationReason,String operatorName) {}
     public record Page(List<Entry> items,long total) {}
     public record Snapshot(Entry entry,ResourceService.Resource resource,List<ResourceService.Field> fields) {}
     @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
@@ -34,17 +34,19 @@ public class ResourceHistoryService {
 
     // MANDATORY makes snapshot failure roll back the corresponding Resource write.
     @Transactional(propagation=Propagation.MANDATORY)
-    public void record(ResourceService.Resource resource,List<ResourceService.Field> fields,String action,String changedField) {
+    public void record(ResourceService.Resource resource,List<ResourceService.Field> fields,String action,String changedField) {record(resource,fields,action,changedField,"");}
+    @Transactional(propagation=Propagation.MANDATORY)
+    public void record(ResourceService.Resource resource,List<ResourceService.Field> fields,String action,String changedField,String reason) {
         try {
-            db.update("INSERT INTO resource_revision(resource_id,version,action,changed_field,recorded_at,resource_snapshot,fields_snapshot,operator_name,operator_user_id) VALUES(?,?,?,?,?,?,?,?,?)",
+            db.update("INSERT INTO resource_revision(resource_id,version,action,changed_field,recorded_at,resource_snapshot,fields_snapshot,operator_name,operator_user_id,operation_reason) VALUES(?,?,?,?,?,?,?,?,?,?)",
                     resource.resourceId(),resource.version(),action,changedField,LocalDateTime.now(ZoneOffset.UTC),
-                    json.writeValueAsString(resource),json.writeValueAsString(fields),Actor.operator(),Actor.userId());
+                    json.writeValueAsString(resource),json.writeValueAsString(fields),Actor.operator(),Actor.userId(),reason);
         }catch(com.fasterxml.jackson.core.JsonProcessingException error){throw new BusinessException(ErrorCode.INTERNAL_ERROR,"资源快照保存失败，本次修改未保存");}
     }
     @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
     public Page list(String id,int limit,int offset) {
         exists(id);
-        var items=db.query("SELECT resource_id,version,action,changed_field,recorded_at FROM resource_revision WHERE resource_id=? ORDER BY version DESC LIMIT ? OFFSET ?",
+        var items=db.query("SELECT resource_id,version,action,changed_field,recorded_at,operation_reason,operator_name FROM resource_revision WHERE resource_id=? ORDER BY version DESC LIMIT ? OFFSET ?",
                 (rs,n)->entry(rs),id,limit,offset);
         return new Page(items,db.queryForObject("SELECT COUNT(*) FROM resource_revision WHERE resource_id=?",Long.class,id));
     }
@@ -73,6 +75,6 @@ public class ResourceHistoryService {
         return rows.isEmpty()?null:rows.get(0);
     }
     private Entry entry(ResultSet rs)throws SQLException {
-        return new Entry(rs.getString("resource_id"),rs.getInt("version"),rs.getString("action"),rs.getString("changed_field"),rs.getTimestamp("recorded_at").toLocalDateTime());
+        return new Entry(rs.getString("resource_id"),rs.getInt("version"),rs.getString("action"),rs.getString("changed_field"),rs.getTimestamp("recorded_at").toLocalDateTime(),rs.getString("operation_reason"),rs.getString("operator_name"));
     }
 }

@@ -45,6 +45,9 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
     public ResponseEntity<ApiResponse<Void>> media(Exception ex) { return error(ErrorCode.UNSUPPORTED_MEDIA_TYPE); }
 
+    @ExceptionHandler(org.springframework.dao.ConcurrencyFailureException.class)
+    public ResponseEntity<ApiResponse<Void>> concurrent(Exception ex){return ResponseEntity.status(409).body(ApiResponse.failure(ErrorCode.VERSION_CONFLICT,"关联记录正在变化，本次操作未提交，请刷新后重新确认"));}
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> unexpected(Exception ex) {
         LOG.error("Unhandled request failure, exception type: {}", ex.getClass().getName());

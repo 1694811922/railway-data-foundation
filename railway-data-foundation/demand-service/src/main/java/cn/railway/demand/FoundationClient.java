@@ -27,6 +27,15 @@ public class FoundationClient {
     public JsonNode context(String grant,HttpServletRequest r){return call(path(grant)+"/receiver-context",true,r,null);}
     public JsonNode worker(String grant,String token){return call(path(grant)+"/receiver-access/check",true,null,token);}
     public JsonNode report(String grant,String token,String body){return request(path(grant)+"/consumption-reports",true,null,token,body);}
+    public JsonNode monitor(String token,String body){
+        if(token==null||!token.matches("[A-Za-z0-9_-]{43,128}"))throw new ReceiverFailure(401,"监测技术凭据无效");
+        try{
+            var request=HttpRequest.newBuilder(base.resolve("/api/v1/telemetry/receiver-reports")).timeout(Duration.ofSeconds(4)).header("X-Receiver-Telemetry-Token",token).header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(body)).build();
+            var response=http.send(request,HttpResponse.BodyHandlers.ofInputStream());byte[] bytes;try(var stream=response.body()){bytes=stream.readNBytes(65537);}
+            if(response.statusCode()!=200)throw new ReceiverFailure(Set.of(400,401,403,404,409).contains(response.statusCode())?response.statusCode():503,"监测事件未确认");
+            var reply=json.readTree(bytes);if(bytes.length>65536||reply.path("code").asInt(-1)!=0||!reply.path("data").isObject())throw new ReceiverFailure(503,"监测回执无效");return reply.path("data");
+        }catch(ReceiverFailure e){throw e;}catch(InterruptedException e){Thread.currentThread().interrupt();throw new ReceiverFailure(503,"监测上报中断");}catch(Exception e){throw new ReceiverFailure(503,"监测上报暂不可用");}
+    }
     private String path(String grant){if(grant==null||!grant.matches("KSG_[a-f0-9]{32}"))throw new ReceiverFailure(400,"授权编号无效");return "/api/v1/kafka-subscriptions/"+grant;}
     private JsonNode call(String path,boolean post,HttpServletRequest r,String token){return request(path,post,r,token,"{}");}
     private JsonNode request(String path,boolean post,HttpServletRequest r,String token,String body){

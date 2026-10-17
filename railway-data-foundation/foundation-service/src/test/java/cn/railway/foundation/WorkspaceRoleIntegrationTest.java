@@ -54,6 +54,22 @@ class WorkspaceRoleIntegrationTest extends AuthenticatedApiTest {
         HttpRequest.Builder builder(String path,boolean token){var r=HttpRequest.newBuilder(URI.create(http.getRootUri()+"/api/v1"+path));if(token&&csrf!=null)r.header(csrf.path("header_name").asText(),csrf.path("token").asText());return r;}
         JsonNode request(String method,String path,Object body,int status)throws Exception{var r=builder(path,true).header("Content-Type","application/json").method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)));var response=client.send(r.build(),HttpResponse.BodyHandlers.ofString());assertThat(response.statusCode()).as(method+" "+path).isEqualTo(status);return json.readTree(response.body());}
     }
+    @Test void resourceLifecycleOwnerAdminAndDemandBoundaries()throws Exception{
+        String path="/resources/"+resourceA;
+        a.request("GET",path+"/lifecycle-impact",null,200);b.request("GET",path+"/lifecycle-impact",null,403);d.request("GET",path+"/lifecycle-impact",null,403);new Session(null,null).request("GET",path+"/lifecycle-impact",null,401);
+        d.request("POST",path+"/unpublish",Map.of("version",1,"reason","禁止需求方操作"),403);b.request("POST",path+"/unpublish",Map.of("version",1,"reason","禁止跨主体"),403);
+        a.request("POST",path+"/unpublish",Map.of("version",1,"reason","提供方下架本人资源"),200);
+        identityDb.update("UPDATE source_system SET provider_subject_id=NULL WHERE source_id=?",sourceA);a.request("GET",path+"/lifecycle-impact",null,403);
+        user("ADMIN",null).request("POST",path+"/republish",Map.of("version",2,"reason","管理员管理无归属资源"),200);
+    }
+    @Test void kafkaPlatformMonitorIsAdministratorOnly()throws Exception{
+        for(var actor:List.of(a,b,d,e))actor.request("GET","/kafka-transfer-events",null,403);
+        String transfers="/transfer-monitor/events?from="+java.time.Instant.now().minusSeconds(60)+"&until="+java.time.Instant.now();
+        for(var actor:List.of(a,b,d,e))actor.request("GET",transfers,null,403);
+        new Session(null,null).request("GET",transfers,null,401);user("ADMIN",null).request("GET",transfers,null,200);
+        new Session(null,null).request("GET","/kafka-transfer-events",null,401);
+        user("ADMIN",null).request("GET","/kafka-transfer-events",null,200);
+    }
     @Test void loginCookiesCsrfLogoutAndAnonymousContract()throws Exception{
         var anonymous=new Session(null,null);anonymous.request("GET","/sources",null,401);anonymous.request("POST","/sources",Map.of(),401);
         var response=a.client.send(a.builder("/sources/"+sourceA+"/status",false).header("Content-Type","application/json").method("PATCH",HttpRequest.BodyPublishers.ofString("{\"status\":\"DISABLED\"}")).build(),HttpResponse.BodyHandlers.ofString());assertThat(response.statusCode()).isEqualTo(403);
@@ -323,7 +339,7 @@ class WorkspaceRoleIntegrationTest extends AuthenticatedApiTest {
         String task=a.request("POST","/sources/"+sid+"/scan",null,200).path("data").path("task_id").asText();
         var input=Map.of("source_id",sid,"scan_task_id",task,"schema_name",uri.getPath().substring(1),"physical_table","container_event","resource_name","新登记归属验收","business_description","只扫描元数据","owner_department","测试单位","security_level","公开","update_mode","实时");
         var resource=a.request("POST","/resources",input,200).path("data");String rid=resource.path("resource_id").asText();resources.add(rid);assertThat(resource.path("provider_subject_id").asText()).isEqualTo(providerA);
-        a.request("POST","/resources/"+rid+"/publish",null,200);a.request("POST","/capabilities",Map.of("resource_id",rid,"capability_name","本人登记的能力","type","REST_API","http_method","GET","endpoint","/containers/events","protocol","HTTP","auth_type","NONE"),200);
+        a.request("POST","/resources/"+rid+"/publish",Map.of("version",1,"reason","本人发布"),200);a.request("POST","/capabilities",Map.of("resource_id",rid,"capability_name","本人登记的能力","type","REST_API","http_method","GET","endpoint","/containers/events","protocol","HTTP","auth_type","NONE"),200);
         b.request("GET","/resources/"+rid,null,403);assertThat(identityDb.queryForObject("SELECT operator_name FROM resource_revision WHERE resource_id=? AND version=1",String.class,rid)).isEqualTo(a.username);
         assertThat(identityDb.queryForObject("SELECT provider_subject_id FROM source_system WHERE source_id=?",String.class,legacy)).isNull();
     }

@@ -2,6 +2,7 @@ import { request } from '../utils/request'
 // Routes directly to the demand service. Foundation never forwards these payloads.
 const baseURL = '/demand/api/v1'
 export const receivingApi = {
+  logs: params => request.get('/receiving-tasks/transfer-logs', { baseURL, params, quiet: true }),
   list: params => request.get('/receiving-tasks', { baseURL, params, quiet: true }),
   get: id => request.get(`/receiving-tasks/${encodeURIComponent(id)}`, { baseURL, quiet: true }),
   progress: id => request.get(`/receiving-tasks/${encodeURIComponent(id)}/progress`, { baseURL, quiet: true }),

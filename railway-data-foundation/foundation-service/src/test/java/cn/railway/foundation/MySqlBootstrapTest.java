@@ -25,7 +25,7 @@ class MySqlBootstrapTest extends AuthenticatedApiTest {
 
     @Test void realMySqlFoundationStartsWithFlywayAndMyBatis() throws Exception {
         assertThat(context.getBean(MybatisPlusAutoConfiguration.class)).isNotNull();
-        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("17");
+        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("20");
         assertThat(flyway.migrate().migrationsExecuted).isZero();
         try (var c = flyway.getConfiguration().getDataSource().getConnection()) {
             assertThat(c.getMetaData().getDatabaseProductName()).isEqualTo("MySQL");
@@ -33,7 +33,7 @@ class MySqlBootstrapTest extends AuthenticatedApiTest {
                 var tables = new HashSet<String>();
                 while (r.next()) tables.add(r.getString(1));
                 assertThat(tables).containsExactlyInAnyOrder("workspace_registration", "workspace_registration_guard", "workspace_account", "flyway_schema_history", "source_system",
-                        "metadata_scan_task", "metadata_scan_table", "metadata_scan_field", "data_resource", "resource_field", "resource_revision", "capability", "source_credential", "sharing_subject", "access_policy", "sharing_relationship", "sharing_relationship_event", "caller_credential", "caller_credential_event", "sharing_runtime_report", "sharing_runtime_event", "kafka_subscription_grant", "kafka_subscription_event", "kafka_subscription_execution", "kafka_consumption_report");
+                        "metadata_scan_task", "metadata_scan_table", "metadata_scan_field", "data_resource", "resource_field", "resource_revision", "capability", "source_credential", "sharing_subject", "access_policy", "sharing_relationship", "sharing_relationship_event", "caller_credential", "caller_credential_event", "sharing_runtime_report", "sharing_runtime_event", "kafka_subscription_grant", "kafka_subscription_event", "kafka_subscription_execution", "kafka_consumption_report", "kafka_receiver_event");
             }
             try (var r = c.createStatement().executeQuery("SELECT COUNT(*), SUM(COLUMN_COMMENT = '') "
                     + "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "

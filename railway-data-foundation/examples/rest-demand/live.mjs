@@ -37,7 +37,7 @@ try{
   const resource=await request('/resources','POST',{resource_name:prefix+'resource_'+run,source_id:source.source_id,scan_task_id:scan.task_id,schema_name:'port_source_db',physical_table:'container_event',business_description:'V0.5 外部 REST 调用方接入验证临时元数据',owner_department:'本机联调',security_level:'内部',update_mode:'实时'});
   fixture.resource_id=resource.resource_id;await save();
   await request(`/resources/${resource.resource_id}/fields/event_time`,'PUT',{business_name:'事件时间',business_description:'数据时间范围',time_field:true,sensitivity_level:'内部',resource_version:resource.version});
-  await request(`/resources/${resource.resource_id}/publish`,'POST');
+  await request(`/resources/${resource.resource_id}/publish`,'POST',{version:resource.version,reason:'独立测试发布'});
   const capability=await request('/capabilities','POST',{resource_id:resource.resource_id,capability_name:prefix+'capability_'+run,type:'REST_API',http_method:'GET',endpoint:'/containers/events',protocol:'HTTP',auth_type:'NONE',description:'外部调用方联调'});
   fixture.capability_id=capability.capability_id;await save();
   await request(`/capabilities/${capability.capability_id}/verify`,'POST');await request(`/capabilities/${capability.capability_id}/enable`,'POST');

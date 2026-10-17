@@ -1,0 +1,38 @@
+<script setup>
+import {ref,reactive,onMounted,onBeforeUnmount,watch} from 'vue'
+import {receivingApi} from '../api/receiving'
+import {telemetryApi} from '../api/telemetry'
+import {explicitDemo,session} from '../utils/sessionState'
+import {receivingReadGate} from '../utils/receiving'
+import {transferPage,monitorPage,logQuery,transferEvents,transferReasons,logOutcomes,commitStates,reportStates,logColor} from '../utils/transferLogs'
+import {displayTime} from '../utils/time'
+const props=defineProps({taskId:{type:String,default:''},admin:{type:Boolean,default:false}})
+const monitor=ref(null)
+const rows=ref([]),total=ref(0),page=ref(1),size=ref(20),loading=ref(false),error=ref(''),auto=ref(false),updated=ref(null)
+const form=reactive({taskId:props.taskId,grantId:'',eventType:'',outcome:'',range:[]}),gate=receivingReadGate()
+let applied={},timer
+async function load(background=false){
+  if(explicitDemo||!session.user)return
+  if(background&&(loading.value||document.hidden))return
+  const token=gate.next(),epoch=session.epoch,params={...applied,limit:size.value,offset:(page.value-1)*size.value}
+  const current=()=>gate.current(token)&&epoch===session.epoch
+  loading.value=true;error.value='';if(!background){rows.value=[];total.value=0;updated.value=null}
+  try{const data=(props.admin?monitorPage:transferPage)(await (props.admin?telemetryApi.receiverEvents(params):receivingApi.logs(params)),params);if(current()){rows.value=data.items;total.value=data.total;updated.value=new Date();monitor.value=props.admin?data:null}}
+  catch(e){if(current()){rows.value=[];total.value=0;updated.value=null;monitor.value=null;auto.value=false;error.value=e.response?.data?.message||e.message||'传输日志读取失败'}}finally{if(current())loading.value=false}
+}
+function query(){try{applied=logQuery(form);page.value=1;load()}catch(e){gate.invalidate();rows.value=[];total.value=0;loading.value=false;error.value=e.message}}
+watch(()=>props.taskId,id=>{gate.invalidate();form.taskId=id;query()})
+watch(auto,value=>{clearInterval(timer);if(value&&!explicitDemo)timer=setInterval(()=>load(true),5000)})
+onMounted(query);onBeforeUnmount(()=>{clearInterval(timer);gate.dispose();rows.value=[]})
+</script>
+<template><section class="stack" data-testid="transfer-logs">
+  <div class="log-toolbar"><el-input v-if="admin" v-model="form.grantId" placeholder="完整授权编号（可选）" aria-label="接收授权编号" clearable style="width:330px" /><el-input v-if="!taskId" v-model="form.taskId" placeholder="完整接收任务编号（可选）" aria-label="接收任务编号" clearable style="width:330px" /><el-select v-model="form.eventType" placeholder="全部事件" aria-label="日志事件" clearable style="width:170px"><el-option v-for="(label,key) in transferEvents" :key="key" :label="label" :value="key" /></el-select><el-select v-model="form.outcome" placeholder="全部结果" aria-label="日志结果" clearable style="width:130px"><el-option v-for="(label,key) in logOutcomes" :key="key" :label="label" :value="key" /></el-select><el-date-picker v-model="form.range" type="datetimerange" start-placeholder="开始时间" end-placeholder="结束时间" style="max-width:360px" /><el-button type="primary" :disabled="explicitDemo" @click="query">查询日志</el-button><el-button :disabled="explicitDemo" :loading="loading" @click="load()">刷新</el-button><el-switch v-model="auto" :disabled="explicitDemo" active-text="每5秒刷新" /></div>
+  <el-alert v-if="admin" title="接收端自报技术事件，仅代表事件发生时状态；未上报和提交结果未知均不补为成功。" type="info" :closable="false" /><el-alert v-if="admin&&monitor&&!monitor.configured" title="接收监测上报尚未配置，历史记录仍可查询。" type="warning" :closable="false" /><el-alert v-if="admin&&monitor?.configured&&!monitor.last_received_at" title="尚未收到接收端技术事件，接收情况未知。" type="info" :closable="false" /><el-alert v-if="explicitDemo" title="演示模式不读取真实传输日志" type="warning" :closable="false" />
+  <el-alert v-if="error" :title="error" type="error" :closable="false" data-testid="transfer-error"><el-button link @click="load()">重试</el-button></el-alert>
+  <template v-else><div class="log-note">落库、位置提交、摘要上报分别记录；没有提交回执时显示未知。<span v-if="updated"> · 更新于 {{displayTime(updated)}}</span></div>
+  <el-table :data="rows" v-loading="loading" row-key="log_id" empty-text="暂无传输过程日志；已有任务的历史过程不会补造" data-testid="transfer-table">
+    <el-table-column type="expand"><template #default="{row}"><div class="log-details"><el-descriptions :column="2" border><el-descriptions-item label="任务编号">{{row.task_id}}</el-descriptions-item><el-descriptions-item label="授权编号">{{row.grant_id}}</el-descriptions-item><el-descriptions-item label="关联批次">{{row.batch_id||'—'}}</el-descriptions-item><el-descriptions-item label="摘要编号">{{row.report_id||'—'}}</el-descriptions-item><el-descriptions-item v-if="admin" label="资源编号">{{row.resource_id}}</el-descriptions-item><el-descriptions-item v-if="admin" label="能力编号">{{row.capability_id}}</el-descriptions-item><el-descriptions-item v-if="admin" label="提供方编号">{{row.provider_subject_id}}</el-descriptions-item><el-descriptions-item v-if="admin" label="需求方编号">{{row.demand_subject_id}}</el-descriptions-item><el-descriptions-item v-if="admin" label="底座收到时间">{{displayTime(row.received_at)}}</el-descriptions-item><el-descriptions-item v-if="admin" label="采集节点">{{row.collector_id}}</el-descriptions-item><el-descriptions-item v-if="admin" label="数据来源">接收端自报</el-descriptions-item><el-descriptions-item label="实际读取条次">{{row.record_count??'—'}}</el-descriptions-item><el-descriptions-item label="重读去重条数">{{row.duplicate_count??'—'}}</el-descriptions-item><el-descriptions-item label="位置提交">{{commitStates[row.commit_state]||'—'}}</el-descriptions-item><el-descriptions-item label="摘要上报">{{reportStates[row.report_state]||'—'}}</el-descriptions-item><el-descriptions-item :label="admin?'接收端自报账号编号':'操作账号编号'">{{row.operator_id||'后台接收服务'}}</el-descriptions-item></el-descriptions><el-table v-if="row.positions.length" :data="row.positions"><el-table-column prop="partition" label="分区" /><el-table-column label="本批首位置"><template #default="{row:p}">{{p.first_offset??'—'}}</template></el-table-column><el-table-column label="本批末位置"><template #default="{row:p}">{{p.last_offset??'—'}}</template></el-table-column><el-table-column prop="next_offset" label="下一消费位置" /></el-table></div></template></el-table-column>
+    <el-table-column label="记录时间" min-width="175"><template #default="{row}">{{displayTime(row.created_at)}}</template></el-table-column><el-table-column prop="task_name" :label="admin?'接收任务编号':'任务名称'" min-width="140" show-overflow-tooltip /><el-table-column label="事件" min-width="140"><template #default="{row}">{{transferEvents[row.event_type]}}</template></el-table-column><el-table-column label="结果" width="90"><template #default="{row}"><el-tag :type="logColor(row.outcome)">{{logOutcomes[row.outcome]}}</el-tag></template></el-table-column><el-table-column label="处理说明" min-width="300"><template #default="{row}">{{transferReasons[row.reason_code]}}</template></el-table-column><el-table-column prop="topic" label="消息主题" min-width="200" show-overflow-tooltip /><el-table-column label="新增落库" width="100"><template #default="{row}">{{row.inserted_count??'—'}}</template></el-table-column><el-table-column label="载荷字节" width="110"><template #default="{row}">{{row.byte_count??'—'}}</template></el-table-column>
+  </el-table><el-pagination v-model:current-page="page" v-model:page-size="size" :total="total" :page-sizes="[10,20,50]" layout="total,sizes,prev,pager,next" :disabled="loading||explicitDemo" @change="load()" /></template>
+</section></template>
+<style scoped>.log-toolbar{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.log-details{padding:18px 28px}.log-note{color:#66788a;font-size:13px}.el-pagination{justify-content:flex-end}.log-details :deep(.el-descriptions__content){overflow-wrap:anywhere}</style>

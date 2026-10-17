@@ -36,7 +36,7 @@ public class SubscriptionExecutor {
     private final ConsumptionService consumption;
     public SubscriptionExecutor(JdbcTemplate db,SubscriptionService grants,SubscriptionBroker broker,EncryptedCredentialService secrets,
                                 KafkaCapabilityVerifier verifier,CapabilityService capabilities,PlatformTransactionManager manager,ConsumptionService consumption) {
-        this.db=db;this.grants=grants;this.broker=broker;this.secrets=secrets;this.verifier=verifier;this.capabilities=capabilities;this.tx=new TransactionTemplate(manager);this.consumption=consumption;
+        this.db=db;this.grants=grants;this.broker=broker;this.secrets=secrets;this.verifier=verifier;this.capabilities=capabilities;this.tx=new TransactionTemplate(manager);this.tx.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);this.consumption=consumption;
     }
     public SubscriptionService.Grant request(String id,String operation,SubscriptionExecutionRequest request) {
         tx.executeWithoutResult(status->{
@@ -67,6 +67,7 @@ public class SubscriptionExecutor {
     }
     public void reconcile(String id) {
         tx.executeWithoutResult(transaction->{
+            cn.railway.foundation.resource.ResourceLocks.child(db,"kafka_subscription_grant",id);
             db.query("SELECT grant_id FROM kafka_subscription_grant WHERE grant_id=? FOR UPDATE",(r,n)->r.getString(1),id);
             var grant=grants.get(id);var execution=execution(id);
             if(execution==null||"REVOKED".equals(execution.state()))return;
@@ -98,7 +99,7 @@ public class SubscriptionExecutor {
     public Delivery claim(String id,SubscriptionExecutionRequest request) {
         return tx.execute(transaction->{
             var grant=grants.locked(id,request.version());requireEligible(grant);var execution=execution(id);
-            if(execution==null||!"ACTIVE".equals(execution.state())||execution.encrypted()==null)invalid("凭据不可领取或已领取；遗失后须停止订阅并重新配置身份");
+            if(execution==null||!"ACTIVE".equals(execution.state())||!"GRANTED".equals(execution.desired())||execution.encrypted()==null)invalid("凭据不可领取或已领取；遗失后须停止订阅并重新配置身份");
             try(var session=broker.open(execution.cluster(),true)){session.check(execution.username(),grant.topic(),grant.consumerGroup());}
             catch(Exception e){throw new BusinessException(ErrorCode.ACCESS_UNAVAILABLE,"Broker权限未确认，暂不能领取凭据");}
             String password=secrets.openSubscription(id,execution.username(),execution.encrypted());

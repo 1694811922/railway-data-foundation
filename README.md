@@ -1,5 +1,7 @@
 # 铁路统一数据底座虚拟接入与共享治理原型系统
 
+2026-10-17：资源下架、重新发布和退役已完成，本机服务已更新，重新登录后在资源目录或详情使用。下架保留审批但暂停共享，重新发布需管理员手动恢复。246项不同后端测试、前端190项/build及真实Kafka链路通过。见[使用指南](railway-data-foundation/docs/RESOURCE_LIFECYCLE_GUIDE.md)。未提交推送Git，未部署云端。
+
 2026-10-12：注册前后端已完成。本机打开 http://127.0.0.1:5173/register 自设首任管理员账号和密码；普通注册由管理员核定共享主体后登录。完整167项后端、132项前端及构建、真实浏览器通过。见 [注册使用指南](railway-data-foundation/docs/ROLE_WORKSPACE_GUIDE.md) 和 [交付记录](railway-data-foundation/docs/REGISTRATION_CHANGELOG.md)。未提交推送Git。以下为历史。
 
 2026-10-11 本轮最新：Kafka正常启动改为只读核对，连续两次重启的原凭据、消息、权限与消费进度验证通过；首次初始化及配置异常拒绝通过。完整后端162项、前端129项及构建、真实Kafka共享与三角色浏览器回归通过。历史认证失败根因未知，Windows主题删除仍受限，稳定部署未完成。使用见[本地实验指南](railway-data-foundation/docs/LOCAL_KAFKA_EXPERIMENT_GUIDE.md)，结果见[重启完善记录](railway-data-foundation/docs/KAFKA_RESTART_HARDENING_CHANGELOG.md)。以下为历史。

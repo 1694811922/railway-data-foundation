@@ -23,6 +23,7 @@ export function existingRegisteredResource(rows,origin,demo) {
   return rows.find(row=>(row._demo===true)===demo && originKeys.every(key=>row[key]===origin[key])) || null
 }
 export function registrationEditScope(scope,form,rows,demo) {
+  if(scope?.status==='RETIRED')return '已退役资源只读，不能编辑'
   const row=rows.find(item=>item.resource_id===scope?.resource_id)
   if(!row || row.version!==scope.version || row.status!==scope.status || (row._demo===true)!==demo)
     return '资源信息已变化，请刷新后重新打开编辑'

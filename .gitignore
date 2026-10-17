@@ -22,6 +22,7 @@ target/
 dist/
 .ppt-foundation/
 .requirements-work/
+/交付文件/
 __pycache__/
 *.pyc
 ~$*

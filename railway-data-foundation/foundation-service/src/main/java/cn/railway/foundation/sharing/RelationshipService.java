@@ -72,7 +72,7 @@ public class RelationshipService {
                 (r,n)->new Event(r.getLong("event_id"),r.getString("relationship_id"),r.getString("action"),r.getString("from_status"),
                         r.getString("to_status"),r.getString("operator_name"),r.getString("reason"),r.getInt("version"),time(r,"occurred_at")),id);
     }
-    @Transactional
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Relationship create(RelationshipRequest r) {
         gate.newApplication(r.providerSubjectId(),r.demandSubjectId(),r.resourceId(),r.capabilityId());
         var binding=lockBinding(r.providerSubjectId(),r.demandSubjectId(),r.resourceId(),r.capabilityId());
@@ -86,7 +86,7 @@ public class RelationshipService {
         event(id,"CREATE",null,"DRAFT",r.reason(),1,now);
         return get(id);
     }
-    @Transactional
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Relationship update(String id,RelationshipUpdateRequest r) {
         var current=locked(id,r.version());
         if(!"DRAFT".equals(current.status())) invalid("仅草稿关系可编辑；确认后需撤回并重新登记，避免绕过审核");
@@ -99,7 +99,7 @@ public class RelationshipService {
         event(id,"UPDATE",current.status(),current.status(),r.reason(),r.version()+1,now);
         return get(id);
     }
-    @Transactional
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Relationship action(String id,String action,RelationshipActionRequest r) {
         var current=locked(id,r.version());
         var target=TRANSITIONS.getOrDefault(action,Map.of()).get(current.status());
@@ -125,7 +125,7 @@ public class RelationshipService {
         event(id,action.toUpperCase(Locale.ROOT),current.status(),target,r.reason(),r.version()+1,now);
         return get(id);
     }
-    @Transactional
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Relationship providerReview(String id,String action,ProviderReviewRequest r){
         var current=locked(id,r.version());gate.providerReview(current.providerSubjectId(),current.resourceId());
         if(!"REQUIRED".equals(current.providerReviewMode())||!"PENDING".equals(current.status()))invalid("只有待审批且需要提供方确认的申请可操作");
@@ -144,12 +144,15 @@ public class RelationshipService {
         return get(id);
     }
     private Relationship locked(String id,int version) {
+        cn.railway.foundation.resource.ResourceLocks.child(db,"sharing_relationship",id);
         var versions=db.query("SELECT version FROM sharing_relationship WHERE relationship_id=? FOR UPDATE",(r,n)->r.getInt(1),id);
         if(versions.isEmpty()) throw new BusinessException(ErrorCode.NOT_FOUND,"共享关系不存在");
         if(versions.get(0)!=version) throw new BusinessException(ErrorCode.VERSION_CONFLICT,"共享关系已变化，请刷新后重新操作");
         return get(id);
     }
     private Binding lockBinding(String provider,String demand,String resource,String capability) {
+        var resources=db.query("SELECT status,source_id FROM data_resource WHERE resource_id=? FOR UPDATE",(r,n)->List.of(r.getString(1),r.getString(2)),resource);
+        if(resources.isEmpty() || !"PUBLISHED".equals(resources.get(0).get(0))) invalid("请选择已发布的数据资源");
         if(provider.equals(demand)) invalid("提供方与需求方必须是不同主体");
         // Stable lock order prevents two opposite party selections from deadlocking.
         for(String id:new TreeSet<>(List.of(provider,demand))) {
@@ -160,8 +163,6 @@ public class RelationshipService {
             if(!subject.get(0).equals(id.equals(provider)?"PROVIDER":"DEMAND")) invalid("提供方或需求方主体角色不匹配");
             if(!"ENABLED".equals(subject.get(1))) invalid("共享主体已停用，请先处理主体状态");
         }
-        var resources=db.query("SELECT status,source_id FROM data_resource WHERE resource_id=? FOR UPDATE",(r,n)->List.of(r.getString(1),r.getString(2)),resource);
-        if(resources.isEmpty() || !"PUBLISHED".equals(resources.get(0).get(0))) invalid("请选择已发布的数据资源");
         var sources=db.query("SELECT status,provider_subject_id FROM source_system WHERE source_id=? FOR UPDATE",(r,n)->new String[]{r.getString(1),r.getString(2)},resources.get(0).get(1));
         if(sources.isEmpty() || !"ENABLED".equals(sources.get(0)[0])) invalid("资源来源已停用");
         String owner=sources.get(0)[1];if(owner!=null&&!owner.equals(provider))Actor.deny();

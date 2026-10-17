@@ -59,9 +59,10 @@ public class CapabilityService {
         if (found.isEmpty()) throw new BusinessException(ErrorCode.NOT_FOUND,"接口能力不存在");
         return found.get(0);
     }
-    @Transactional
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Capability create(CapabilityRequest request) {
         gate.resource(request.resourceId());
+        cn.railway.foundation.resource.ResourceLocks.lock(db,request.resourceId());
         var resource=requireResource(request.resourceId());
         if (!"PUBLISHED".equals(resource.status())) throw new BusinessException(ErrorCode.BUSINESS_ERROR,"请先发布所属资源");
         Attributes a=validate(request,resource.physicalTable());
@@ -74,8 +75,9 @@ public class CapabilityService {
         } catch (DuplicateKeyException ex) { throw new BusinessException(ErrorCode.BUSINESS_ERROR,"同一资源下能力名称不能重复"); }
         return get(id);
     }
-    @Transactional
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Capability update(String id,CapabilityRequest request) {
+        lockMutable(id,false);
         db.query("SELECT capability_id FROM capability WHERE capability_id=? FOR UPDATE",(r,n)->r.getString(1),id);
         Capability current=get(id);
         if (!"DRAFT".equals(current.status())) throw new BusinessException(ErrorCode.BUSINESS_ERROR,"仅草稿能力可以编辑");
@@ -93,7 +95,9 @@ public class CapabilityService {
         } catch (DuplicateKeyException ex) { throw new BusinessException(ErrorCode.BUSINESS_ERROR,"同一资源下能力名称不能重复"); }
         return get(id);
     }
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Capability verify(String id) {
+        lockMutable(id,true);
         Capability current=get(id);
         if (!Set.of("DRAFT","VERIFIED","DISABLED").contains(current.status()))
             throw new BusinessException(ErrorCode.BUSINESS_ERROR,"当前状态不允许重新验证");
@@ -108,7 +112,9 @@ public class CapabilityService {
         if (changed==0) stateChanged();
         return get(id);
     }
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED,noRollbackFor=BusinessException.class)
     public Capability enable(String id) {
+        lockMutable(id,true);
         Capability current=get(id);
         requireRuntime(current);
         if ("ENABLED".equals(current.status())) return current;
@@ -126,7 +132,9 @@ public class CapabilityService {
         if (changed==0) stateChanged();
         return get(id);
     }
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Capability disable(String id) {
+        lockMutable(id,false);
         Capability current=get(id);
         // Disabling must remain possible when Broker configuration or Source is unavailable.
         if(!supportedRest(current) && !supportedKafka(current)) requireRestRuntime(current);
@@ -139,8 +147,9 @@ public class CapabilityService {
         return get(id);
     }
 
-    @Transactional
+    @Transactional(isolation=org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void delete(String id) {
+        lockMutable(id,false);
         db.query("SELECT capability_id FROM capability WHERE capability_id=? FOR UPDATE",(r,n)->r.getString(1),id);
         Capability current=get(id);
         if (!"DRAFT".equals(current.status()))
@@ -216,6 +225,11 @@ public class CapabilityService {
         throw new BusinessException(ErrorCode.BUSINESS_ERROR,"能力状态已变化，请刷新后重试");
     }
 
+    private void lockMutable(String id,boolean published) {
+        String resource=cn.railway.foundation.resource.ResourceLocks.child(db,"capability",id);
+        String state=cn.railway.foundation.resource.ResourceLocks.lock(db,resource);
+        if("RETIRED".equals(state)||published&&!"PUBLISHED".equals(state))throw new BusinessException(ErrorCode.BUSINESS_ERROR,"资源已下架或退役，不能执行该能力操作");
+    }
     private record ResourceRef(String status,String physicalTable) {}
     private ResourceRef requireResource(String id) {
         var rows=db.query("SELECT status,physical_table FROM data_resource WHERE resource_id=?",

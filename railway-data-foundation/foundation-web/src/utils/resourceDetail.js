@@ -34,6 +34,7 @@ export function validateFieldChanges(form) {
   return ''
 }
 export function fieldEditScope(scope,item,rows,demo) {
+  if(item?.status==='RETIRED')return '已退役资源只读，不能编辑字段'
   if(!scope || !item || scope.resource_id!==item.resource_id || scope.version!==item.version || scope.demo!==demo)
     return '资源信息已变化，请刷新后重新打开字段编辑'
   if(!rows.some(row=>row.field_name===scope.field_name)) return '当前字段尚未读取成功，请重新加载字段'

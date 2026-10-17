@@ -3,3 +3,4 @@
 **/target/
 .runtime/
 *.log
+.private/

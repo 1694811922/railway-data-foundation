@@ -15,7 +15,7 @@ import java.util.concurrent.*;
 import static org.assertj.core.api.Assertions.*;
 
 @EnabledIfEnvironmentVariable(named="RUN_MYSQL_TESTS",matches="true")
-@SpringBootTest(webEnvironment=SpringBootTest.WebEnvironment.RANDOM_PORT,properties={"KAFKA_SUBSCRIPTION_EXECUTION_ENABLED=true","KAFKA_SUBSCRIPTION_RECONCILE_MS=3600000"})
+@SpringBootTest(webEnvironment=SpringBootTest.WebEnvironment.RANDOM_PORT,properties={"FOUNDATION_RECEIVER_TELEMETRY_TOKEN=receiver_fixture_only_token_00000000000000000000000000000000","KAFKA_SUBSCRIPTION_EXECUTION_ENABLED=true","KAFKA_SUBSCRIPTION_RECONCILE_MS=3600000"})
 class KafkaConsumptionIntegrationTest extends AuthenticatedApiTest {
     @Autowired TestRestTemplate http;
     @Autowired JdbcTemplate db;
@@ -39,6 +39,8 @@ class KafkaConsumptionIntegrationTest extends AuthenticatedApiTest {
         db.update("INSERT INTO capability(capability_id,resource_id,capability_name,type,topic,protocol,auth_type,status,health_status,created_at,updated_at) VALUES(?,?,?,'KAFKA_TOPIC',?,'KAFKA','SASL','ENABLED','UP',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))",capability,resource,tag,tag);
     }
     @AfterEach void cleanup() {
+        db.update("DELETE FROM sharing_runtime_event WHERE resource_id=?",resource);
+        db.update("DELETE FROM sharing_runtime_report WHERE collector_id=?",tag);
         for(String grant:grants) {db.update("DELETE FROM kafka_consumption_report WHERE grant_id=?",grant);db.update("DELETE FROM kafka_subscription_execution WHERE grant_id=?",grant);db.update("DELETE FROM kafka_subscription_event WHERE grant_id=?",grant);db.update("DELETE FROM kafka_subscription_grant WHERE grant_id=?",grant);}
         db.update("DELETE FROM capability WHERE capability_id=?",capability);db.update("DELETE FROM resource_field WHERE resource_id=?",resource);db.update("DELETE FROM data_resource WHERE resource_id=?",resource);
         db.update("DELETE FROM metadata_scan_table WHERE task_id=?",scan);db.update("DELETE FROM metadata_scan_task WHERE task_id=?",scan);db.update("DELETE FROM source_system WHERE source_id=?",source);
@@ -124,5 +126,80 @@ class KafkaConsumptionIntegrationTest extends AuthenticatedApiTest {
         assertThat(db.queryForObject("SELECT COUNT(*) FROM kafka_consumption_report WHERE grant_id=?",Long.class,activeId)).isEqualTo(1);
         body.put("report_id",UUID.randomUUID().toString());assertThat(send(activeId,body,token).getStatusCode()).isEqualTo(HttpStatus.OK);
         var page=http.getForObject("/api/v1/kafka-subscriptions/"+activeId+"/consumption?limit=1&offset=1",JsonNode.class).path("data");assertThat(page.path("total").asInt()).isEqualTo(2);assertThat(page.path("items").size()).isEqualTo(1);assertThat(page.path("summary").path("records").asLong()).isEqualTo(4);
+    }
+
+    static final String MONITOR_TOKEN="receiver_fixture_only_token_00000000000000000000000000000000";
+    String transferPath(){return "/api/v1/transfer-monitor/events?from="+Instant.now().minusSeconds(3600)+"&until="+Instant.now().plusSeconds(60)+"&resourceId="+resource;}
+    void runtime(String point,Instant when,String outcome,long count){
+        String report=UUID.randomUUID().toString(),event=UUID.randomUUID().toString();var time=java.time.LocalDateTime.ofInstant(when,java.time.ZoneOffset.UTC);
+        db.update("INSERT INTO sharing_runtime_report(report_id,collector_id,collection_point,window_start,window_until,window_closed,content_digest,accepted_events,duplicate_events,received_at) VALUES(?,?,?,DATE_FORMAT(?,'%Y-%m-%d %H:%i:00'),DATE_ADD(DATE_FORMAT(?,'%Y-%m-%d %H:%i:00'),INTERVAL 1 MINUTE),false,?,1,0,?)",report,tag,point,time,time,"a".repeat(64),time);
+        db.update("INSERT INTO sharing_runtime_event(event_id,report_id,trace_id,collector_id,collection_point,resource_id,started_at,completed_at,outcome,reason_code,http_status,record_count,byte_count,duration_ms,content_digest,received_at) VALUES(?,?,?,?,?,?,?,?,?,'COMPLETED',200,?,32,7,?,?)",event,report,UUID.randomUUID().toString(),tag,point,resource,time,time,outcome,count,"b".repeat(64),time);
+    }
+    @Test void unifiedMonitorPaginatesBothSourcesAndCountsStoredMessagesOnlyOnce(){
+        active();var stored=monitorEvent();monitor(Map.of("events",List.of(stored)),MONITOR_TOKEN);monitor(Map.of("events",List.of(stored)),MONITOR_TOKEN);
+        var ack=new LinkedHashMap<>(stored);ack.put("event_id",UUID.randomUUID().toString());ack.put("event_type","OFFSET_COMMITTED");ack.put("reason_code","KAFKA_COMMIT_CONFIRMED");ack.put("storage_duration_ms",23);for(String k:List.of("record_count","inserted_count","duplicate_count","byte_count"))ack.remove(k);ack.put("positions",List.of(Map.of("partition",0,"next_offset",8)));
+        assertThat(monitor(Map.of("events",List.of(ack)),MONITOR_TOKEN).getStatusCode()).isEqualTo(HttpStatus.OK);
+        runtime("REST_PROVIDER",Instant.now().minusSeconds(10),"SUCCESS",9);runtime("KAFKA_PRODUCER",Instant.now().minusSeconds(5),"SUCCESS",1);
+        var page=http.getForObject(transferPath()+"&limit=1",JsonNode.class).path("data");assertThat(page.path("total").asInt()).isEqualTo(4);assertThat(page.path("items").size()).isEqualTo(1);
+        assertThat(page.path("summary").path("rest_calls").asInt()).isEqualTo(1);assertThat(page.path("summary").path("kafka_sent").asInt()).isEqualTo(1);assertThat(page.path("summary").path("received_records").asInt()).isEqualTo(1);
+        var filtered=http.getForObject(transferPath()+"&stage=KAFKA_STORE",JsonNode.class).path("data");assertThat(filtered.path("total").asInt()).isEqualTo(1);assertThat(filtered.path("summary")).isEqualTo(page.path("summary"));
+        var row=filtered.path("items").get(0);assertThat(row.path("duration_ms").asLong()).isEqualTo(23);assertThat(row.path("duration_scope").asText()).isEqualTo("DB_TRANSACTION");assertThat(row.path("origin").asText()).isEqualTo("RECEIVER");assertThat(row.path("resource_name").asText()).isEqualTo(tag);
+        assertThat(filtered.toString()).doesNotContain("message_value","password","content_digest",MONITOR_TOKEN,token);
+        assertThat(http.getForObject(transferPath()+"&offset=3&limit=1",JsonNode.class).path("data").path("items").get(0).path("method").asText()).isEqualTo("REST");
+    }
+    @Test void unifiedMonitorTimeBoundsUnknownsAndParameterValidation(){
+        var until=Instant.now().minusSeconds(60).truncatedTo(ChronoUnit.MILLIS);runtime("REST_PROVIDER",until.minusSeconds(1),"ERROR",0);runtime("REST_PROVIDER",until,"SUCCESS",1);
+        String path="/api/v1/transfer-monitor/events?resourceId="+resource+"&from="+until.minusSeconds(10)+"&until="+until;
+        var page=http.getForObject(path,JsonNode.class).path("data");assertThat(page.path("total").asInt()).isEqualTo(1);assertThat(page.path("summary").path("error_events").asInt()).isEqualTo(1);assertThat(page.path("summary").path("received_records").isNull()).isTrue();
+        for(String suffix:List.of("&limit=51","&offset=-1","&method=CDC","&stage=bad","&taskId=bad","&traceId=bad"))assertThat(http.getForEntity(path+suffix,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(http.getForEntity("/api/v1/transfer-monitor/events?from="+until.minusSeconds(86401)+"&until="+until,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(new TestRestTemplate().getForEntity(http.getRootUri()+path,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+    @Test void oldMonitorReplayRemainsCompatibleAndDurationCannotBeInjectedIntoOtherStages(){
+        active();var stored=monitorEvent();assertThat(monitor(Map.of("events",List.of(stored)),MONITOR_TOKEN).getStatusCode()).isEqualTo(HttpStatus.OK);
+        stored.put("storage_duration_ms",null);assertThat(monitor(Map.of("events",List.of(stored)),MONITOR_TOKEN).getBody().path("data").path("duplicates").asInt()).isEqualTo(1);
+        stored.put("storage_duration_ms",12);assertThat(monitor(Map.of("events",List.of(stored)),MONITOR_TOKEN).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        var row=http.getForObject(transferPath()+"&stage=KAFKA_STORE",JsonNode.class).path("data").path("items").get(0);assertThat(row.path("duration_ms").isNull()).isTrue();
+    }
+    Map<String,Object> monitorEvent(){var e=new LinkedHashMap<String,Object>();e.put("event_id",UUID.randomUUID().toString());e.put("task_id","RCV_"+"a".repeat(32));e.put("grant_id",activeId);e.put("batch_id",UUID.randomUUID().toString());e.put("event_type","BATCH_STORED");e.put("outcome","SUCCESS");e.put("reason_code","DATABASE_COMMITTED");e.put("record_count",1);e.put("inserted_count",1);e.put("duplicate_count",0);e.put("byte_count",32);e.put("positions",List.of(Map.of("partition",0,"first_offset",7,"last_offset",7,"next_offset",8)));e.put("created_at",Instant.now().truncatedTo(ChronoUnit.MILLIS).toString());return e;}
+    ResponseEntity<JsonNode> monitor(Object body,String secret){var headers=new HttpHeaders();headers.setContentType(MediaType.APPLICATION_JSON);if(secret!=null)headers.set("X-Receiver-Telemetry-Token",secret);return http.exchange("/api/v1/telemetry/receiver-reports",HttpMethod.POST,new HttpEntity<>(body,headers),JsonNode.class);}
+    @Test void receiverEventsRequireIndependentServiceIdentityAndDeriveOwnership(){
+        active();var e=monitorEvent();var body=Map.of("events",List.of(e));
+        assertThat(monitor(body,null).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);assertThat(monitor(body,token).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(monitor(body,MONITOR_TOKEN).getStatusCode()).isEqualTo(HttpStatus.OK);
+        var result=http.getForObject("/api/v1/kafka-transfer-events?grantId="+activeId,JsonNode.class).path("data");assertThat(result.path("total").asInt()).isEqualTo(1);
+        var row=result.path("items").get(0);assertThat(row.path("provider_subject_id").asText()).isEqualTo(provider);assertThat(row.path("demand_subject_id").asText()).isEqualTo(demand);assertThat(row.path("resource_id").asText()).isEqualTo(resource);assertThat(row.path("topic").asText()).isEqualTo(tag);assertThat(row.path("commit_state").asText()).isEqualTo("UNKNOWN");assertThat(result.path("source").asText()).isEqualTo("RECEIVER_SELF_REPORTED");
+        assertThat(result.toString()).doesNotContain(MONITOR_TOKEN,token,"content_digest","message_value","encrypted_secrets");
+        var anonymous=new TestRestTemplate();assertThat(anonymous.getForEntity(http.getRootUri()+"/api/v1/kafka-transfer-events",JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+    @Test void receiverReplayIsIdempotentConflictsRollBackWholeBatch(){
+        active();var e=monitorEvent();assertThat(monitor(Map.of("events",List.of(e)),MONITOR_TOKEN).getStatusCode()).isEqualTo(HttpStatus.OK);
+        var replay=monitor(Map.of("events",List.of(e)),MONITOR_TOKEN);assertThat(replay.getBody().path("data").path("duplicates").asInt()).isEqualTo(1);
+        var another=monitorEvent();e.put("byte_count",33);
+        assertThat(monitor(Map.of("events",List.of(another,e)),MONITOR_TOKEN).getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(db.queryForObject("SELECT COUNT(*) FROM kafka_receiver_event WHERE grant_id=?",Long.class,activeId)).isEqualTo(1);
+    }
+    @Test void receiverReportsAfterRevocationDoNotReenableConsumption(){
+        var grant=active();db.update("UPDATE kafka_subscription_grant SET status='REVOKED' WHERE grant_id=?",activeId);db.update("UPDATE kafka_subscription_execution SET desired_state='REVOKED',execution_state='REVOKED' WHERE grant_id=?",activeId);
+        var e=monitorEvent();e.put("event_type","BLOCKED");e.put("outcome","ERROR");e.put("reason_code","AUTHORIZATION_INVALID");for(String k:List.of("record_count","inserted_count","duplicate_count","byte_count"))e.remove(k);e.put("positions",List.of());e.remove("batch_id");
+        assertThat(monitor(Map.of("events",List.of(e)),MONITOR_TOKEN).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(send(activeId,report(),token).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        var before=db.queryForMap("SELECT * FROM kafka_subscription_execution WHERE grant_id=?",activeId);
+        assertThat(db.queryForObject("SELECT execution_state FROM kafka_subscription_execution WHERE grant_id=?",String.class,activeId)).isEqualTo("REVOKED");
+    }
+    @Test void receiverRejectsPayloadSecretsMalformedCountsPositionsAndDates(){
+        active();for(String secret:List.of("password","message_value","subject_id","topic","operator_name")){var e=monitorEvent();e.put(secret,"MUST_NOT_PERSIST");assertThat(monitor(Map.of("events",List.of(e)),MONITOR_TOKEN).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);}
+        for(var patch:List.<Map<String,Object>>of(Map.of("inserted_count",2),Map.of("byte_count",1.5),Map.of("reason_code","raw exception"),Map.of("outcome","ERROR"),Map.of("created_at","2099-01-01T00:00:00Z"),Map.of("positions",List.of(Map.of("partition",0,"first_offset",9,"last_offset",7,"next_offset",8))))){var e=monitorEvent();e.putAll(patch);assertThat(monitor(Map.of("events",List.of(e)),MONITOR_TOKEN).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);}
+        assertThat(db.queryForObject("SELECT COUNT(*) FROM kafka_receiver_event WHERE grant_id=?",Long.class,activeId)).isZero();
+    }
+    @Test void receiverQueryFiltersAndAcknowledgementsRemainIndependent(){
+        active();var e=monitorEvent();monitor(Map.of("events",List.of(e)),MONITOR_TOKEN);
+        var occurred=Instant.parse(e.get("created_at").toString());assertThat(db.queryForObject("SELECT created_at FROM kafka_receiver_event WHERE grant_id=?",java.time.LocalDateTime.class,activeId).toInstant(java.time.ZoneOffset.UTC)).isEqualTo(occurred);
+        assertThat(db.queryForObject("SELECT ABS(TIMESTAMPDIFF(SECOND,received_at,UTC_TIMESTAMP(3))) FROM kafka_receiver_event WHERE grant_id=?",Long.class,activeId)).isLessThan(5);
+
+        var ack=new LinkedHashMap<>(e);ack.put("event_id",UUID.randomUUID().toString());ack.put("event_type","OFFSET_COMMITTED");ack.put("reason_code","KAFKA_COMMIT_CONFIRMED");for(String k:List.of("record_count","inserted_count","duplicate_count","byte_count"))ack.remove(k);ack.put("positions",List.of(Map.of("partition",0,"next_offset",8)));monitor(Map.of("events",List.of(ack)),MONITOR_TOKEN);
+        var page=http.getForObject("/api/v1/kafka-transfer-events?grantId="+activeId+"&eventType=BATCH_STORED&limit=1",JsonNode.class).path("data");assertThat(page.path("total").asInt()).isEqualTo(1);assertThat(page.path("items").get(0).path("commit_state").asText()).isEqualTo("CONFIRMED");
+        assertThat(http.getForObject("/api/v1/kafka-transfer-events?grantId="+activeId+"&outcome=ERROR",JsonNode.class).path("data").path("total").asInt()).isZero();
+        for(String query:List.of("limit=51","offset=-1","eventType=bad","taskId=bad","grantId=bad","from=bad","from=2026-01-02T00:00:00Z&until=2026-01-01T00:00:00Z"))assertThat(http.getForEntity("/api/v1/kafka-transfer-events?"+query,JsonNode.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
     }
 }

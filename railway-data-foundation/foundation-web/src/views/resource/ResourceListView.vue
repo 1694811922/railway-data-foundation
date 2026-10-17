@@ -12,10 +12,13 @@ import { resourcePayload, validateResource, resourceError, isResourceConflict } 
 import { isDemoResource } from '../../mock/demoData'
 import DemoNotice from '../../components/DemoNotice.vue'
 import StatusTag from '../../components/StatusTag.vue'
+import ResourceLifecycleDialog from '../../components/ResourceLifecycleDialog.vue'
+import {lifecycleActions,lifecycleLabels} from '../../utils/resourceLifecycle'
 import { catalogQuery, catalogRouteQuery, filterResources, catalogPage, resourcePageSizes } from '../../utils/resourceCatalog'
 import { existingRegisteredResource, registrationCreateScope, registrationEditScope, verifyRegistrationOrigin } from '../../utils/resourceRegistration'
 const route = useRoute(), router = useRouter()
 const rows = ref([]), demo = ref(false), dialog = ref(false), editing = ref('')
+const lifecycleOpen=ref(false),lifecycleResource=ref(null),lifecycleAction=ref(''),lifecycleBusy=ref(false)
 const saving = ref(false), publishing = ref(''), deleting = ref(''), loading = ref(false), formDemo = ref(false)
 const loadError=ref(''), complete=ref(true), notice=ref('')
 const conflict=ref('')
@@ -23,7 +26,7 @@ const initial=catalogQuery(route.query), search=reactive({...initial.filters}), 
 const page=ref(initial.page), pageSize=ref(initial.pageSize)
 let loadVersion=0, hasReal=false, originVersion=0, contextVersion=0, active=true, editScope=null
 const origin=ref(null),originLoading=ref(false),originError=ref('')
-const busy=computed(()=>saving.value || !!publishing.value || !!deleting.value)
+const busy=computed(()=>saving.value || !!publishing.value || !!deleting.value || lifecycleOpen.value || lifecycleBusy.value)
 const duplicate=computed(()=>editing.value ? null : existingRegisteredResource(rows.value,origin.value,formDemo.value))
 const canSave=computed(()=>dialog.value && !conflict.value && !loading.value && !loadError.value && !busy.value && !originLoading.value && (editing.value || (origin.value && !originError.value && !duplicate.value)))
 const currentContext=version=>active && version===contextVersion
@@ -117,35 +120,24 @@ async function save() {
   } }
   finally { saving.value = false }
 }
-async function publish(row) {
-  if(busy.value || loading.value || loadError.value)return
-  const scope=registrationEditScope(row,row,rows.value,isDemoResource(row.resource_id))
-  if(scope || row.status!=='DRAFT')return ElMessage.warning(scope || '仅草稿资源可发布')
-  const invalid = validateResource(row)
-  if (invalid) return ElMessage.warning(invalid)
-  publishing.value = row.resource_id
-  const context=contextVersion
-  try {
-    const result = await hub.publishResource(row.resource_id)
-    if(!currentContext(context))return
-    ElMessage.success(`已发布 ${result.value.resource_id}${result.demo ? '（演示数据）' : ''}`)
-    await load(true)
-  } catch (error) { if(currentContext(context))ElMessage.error(resourceError(error, '发布资源')) }
-  finally { publishing.value = '' }
+function openLifecycle(row,action){
+  if(busy.value||loading.value||loadError.value)return
+  lifecycleResource.value={...row};lifecycleAction.value=action;lifecycleOpen.value=true
 }
+function publish(row){openLifecycle(row,'publish')}
 async function removeResource(row){
   if(busy.value||loading.value||loadError.value)return
   if(row.status!=='DRAFT')return ElMessage.warning('仅草稿资源可以删除')
   try{
-    await ElMessageBox.confirm(`确认删除草稿资源“${row.resource_name}”？资源字段元数据将一并删除。`,'删除资源',{confirmButtonText:'确认删除',cancelButtonText:'取消',type:'warning'})
+    await ElMessageBox.confirm(`确认删除草稿资源“${row.resource_name}”？资源登记与字段元数据将一并删除，业务源表和源数据不会删除。`,'删除资源',{confirmButtonText:'确认删除',cancelButtonText:'取消',type:'warning'})
     deleting.value=row.resource_id
-    await hub.deleteResource(row.resource_id)
+    await hub.deleteResource(row.resource_id,row.version)
     if(!active)return
     ElMessage.success('草稿资源已删除');await load(true)
   }catch(error){if(error!=='cancel'&&error!=='close'&&active)ElMessage.error(resourceError(error,'删除资源'))}
   finally{deleting.value=''}
 }
-function moreAction(row,command){if(command==='edit')open(row);else if(command==='delete')removeResource(row)}
+function moreAction(row,command){if(command==='edit')open(row);else if(command==='delete')removeResource(row);else if(lifecycleActions(row.status).includes(command))openLifecycle(row,command)}
 function refreshAfterConflict(){if(busy.value)return;dialog.value=false;conflict.value='';load()}
 watch(() => JSON.stringify([route.query.fromTable,route.query.source,route.query.schema,route.query.task]), () => {
   ++contextVersion;++originVersion;dialog.value=false;origin.value=null;originError.value='';originLoading.value=false;editScope=null
@@ -161,6 +153,7 @@ onBeforeUnmount(()=>{active=false;++loadVersion;++originVersion;++contextVersion
       <div><h1>数据资源目录</h1></div>
       <div class="actions"><el-button :loading="loading" :disabled="busy" @click="load">刷新目录</el-button><el-button v-if="canManage() && route.query.fromTable && !dialog" :disabled="busy" @click="open()">继续登记所选表</el-button><el-button v-if="canManage()" type="primary" :disabled="busy" @click="router.push('/scans')">＋ 从扫描结果创建资源</el-button></div>
     </div>
+    <ResourceLifecycleDialog v-model="lifecycleOpen" :resource="lifecycleResource" :action="lifecycleAction" :demo="lifecycleResource ? isDemoResource(lifecycleResource.resource_id) : false" @busy="lifecycleBusy=$event" @changed="load(true)" />
     <DemoNotice :show="demo" />
     <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" show-icon data-testid="catalog-error" />
     <el-alert v-else-if="!complete" :title="notice" type="warning" :closable="false" show-icon data-testid="catalog-incomplete" />
@@ -169,7 +162,7 @@ onBeforeUnmount(()=>{active=false;++loadVersion;++originVersion;++contextVersion
       <el-form :model="search" label-position="top" class="catalog-filters" @submit.prevent="query">
         <el-form-item label="关键词" class="keyword"><el-input v-model="search.keyword" maxlength="200" clearable placeholder="搜索资源名称、编号、物理表、来源或责任单位" @keyup.enter="query" /></el-form-item>
         <el-form-item label="来源系统"><el-select v-model="search.source_id" clearable filterable placeholder="全部来源"><el-option v-for="source in sourceOptions" :key="source.id" :value="source.id" :label="source.name" /></el-select></el-form-item>
-        <el-form-item label="资源状态"><el-select v-model="search.status" clearable placeholder="全部状态"><el-option label="草稿" value="DRAFT" /><el-option label="已发布" value="PUBLISHED" /></el-select></el-form-item>
+        <el-form-item label="资源状态"><el-select v-model="search.status" clearable placeholder="全部状态"><el-option label="草稿" value="DRAFT" /><el-option label="已发布" value="PUBLISHED" /><el-option label="已下架" value="OFFLINE" /><el-option label="已退役" value="RETIRED" /></el-select></el-form-item>
         <el-form-item label="安全等级"><el-select v-model="search.security_level" clearable placeholder="全部等级"><el-option v-for="level in ['公开','内部','敏感','机密']" :key="level" :value="level" :label="level" /></el-select></el-form-item>
         <div class="filter-actions"><el-button type="primary" :disabled="loading || !!loadError" @click="query">查询</el-button><el-button :disabled="loading" @click="reset">重置</el-button></div>
       </el-form>
@@ -186,7 +179,7 @@ onBeforeUnmount(()=>{active=false;++loadVersion;++originVersion;++contextVersion
         <el-table-column label="操作" width="185" fixed="right"><template #default="{row}"><div class="table-actions">
           <el-button link type="primary" @click="viewResource(row)">查看</el-button>
           <el-button v-if="canManage() && row.status==='DRAFT'" link type="primary" :loading="publishing===row.resource_id" :disabled="busy || loading" @click="publish(row)">发布</el-button>
-          <el-dropdown v-if="canManage()" :disabled="busy||loading" @command="moreAction(row,$event)"><el-button link type="primary">更多操作⌄</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="edit">编辑资源</el-dropdown-item><el-dropdown-item command="delete" :disabled="row.status!=='DRAFT'" divided>删除草稿</el-dropdown-item></el-dropdown-menu></template></el-dropdown>
+          <el-dropdown v-if="canManage()" :disabled="busy||loading" @command="moreAction(row,$event)"><el-button link type="primary">更多操作⌄</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="edit" :disabled="row.status==='RETIRED'">编辑资源</el-dropdown-item><el-dropdown-item v-for="action in lifecycleActions(row.status).filter(a=>a!=='publish')" :key="action" :command="action">{{lifecycleLabels[action]}}</el-dropdown-item><el-dropdown-item command="delete" :disabled="row.status!=='DRAFT'" divided>删除草稿</el-dropdown-item></el-dropdown-menu></template></el-dropdown>
         </div></template></el-table-column>
       </el-table>
       <div v-if="!loadError" class="catalog-pagination"><el-pagination :current-page="paged.page" :page-size="pageSize" :page-sizes="resourcePageSizes" :total="filtered.length" layout="sizes, prev, pager, next, jumper" :disabled="loading" @current-change="turnPage" @size-change="resize" /></div>
